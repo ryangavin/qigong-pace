@@ -1,0 +1,21 @@
+{
+  "name": "qigong-pace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Learn qi gong moves with a teacher that moves exactly at your pace, driven by webcam pose tracking.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}
