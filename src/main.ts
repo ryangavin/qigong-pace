@@ -499,7 +499,11 @@ $<HTMLInputElement>('videoFile').addEventListener('change', async (e) => {
 })
 
 for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button')) {
-  b.addEventListener('click', () => setPosture(b.dataset.posture as Posture))
+  b.addEventListener('click', () => {
+    const p = b.dataset.posture as Posture
+    // Re-clicking the active posture must not rebuild the Follower mid-move.
+    if (p !== posture) setPosture(p)
+  })
 }
 
 setPosture(posture)
