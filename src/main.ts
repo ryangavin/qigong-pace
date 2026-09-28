@@ -11,9 +11,11 @@ import {
   poseFromLandmarks,
   segmentErrors,
   SEGMENTS,
+  POSTURES,
   toPx,
   type Features,
   type Pose,
+  type Posture,
   type View,
 } from './skeleton'
 
@@ -31,20 +33,38 @@ interface Entry {
   id: string
   name: string
   cue: string
+  postures: Posture[]
   video?: VideoTeacher
 }
 
-const entries: Entry[] = DEMO_MOVES.map((m) => ({ id: m.id, name: m.name, cue: m.cue }))
-let entry = entries[0]
-let ref: Reference = referenceFromMove(DEMO_MOVES[0])
+// ---- Posture -----------------------------------------------------------------
+
+const POSTURE_KEY = 'qigong-pace.posture'
+
+function loadPosture(): Posture {
+  try {
+    const saved = localStorage.getItem(POSTURE_KEY)
+    if (saved && (POSTURES as readonly string[]).includes(saved)) return saved as Posture
+  } catch {
+    // Storage can be blocked; standing is the default.
+  }
+  return 'standing'
+}
+
+let posture = loadPosture()
+
+const entries: Entry[] = DEMO_MOVES.map((m) => ({ id: m.id, name: m.name, cue: m.cue, postures: m.postures }))
+const available = () => entries.filter((e) => e.postures.includes(posture))
+let entry = available()[0] ?? entries[0]
+let ref: Reference = buildRef(entry)
 let follower = new Follower(ref)
 
 function buildRef(e: Entry): Reference {
-  if (!e.video) return referenceFromMove(DEMO_MOVES.find((m) => m.id === e.id)!)
+  if (!e.video) return referenceFromMove(DEMO_MOVES.find((m) => m.id === e.id)!, posture)
   const v = e.video
   const opts = { aspect: v.aspect, flipX: false, facingAway: $<HTMLInputElement>('facingAway').checked }
   const poses = cleanTrack(v.landmarks.map((lm) => (lm ? poseFromLandmarks(lm, opts) : null)))
-  return buildReference(v.name, v.fps, v.aspect, poses)
+  return buildReference(v.name, v.fps, v.aspect, poses, posture)
 }
 
 function selectEntry(e: Entry) {
@@ -65,13 +85,32 @@ function selectEntry(e: Entry) {
 function renderMoveList() {
   const select = $<HTMLSelectElement>('move')
   select.innerHTML = ''
-  for (const e of entries) {
+  for (const e of available()) {
     const o = document.createElement('option')
     o.value = e.id
     o.textContent = e.name
     select.append(o)
   }
   select.value = entry.id
+}
+
+function setPosture(p: Posture) {
+  posture = p
+  try {
+    localStorage.setItem(POSTURE_KEY, p)
+  } catch {
+    // Not remembered, but still applied.
+  }
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.posture === p))
+  }
+  $('youEmptyHint').textContent =
+    p === 'seated'
+      ? 'Sit facing the screen with your head, arms and waist in view.'
+      : 'Stand back so your whole body is in view, facing the screen.'
+  const next = entry.postures.includes(p) ? entry : available()[0]
+  if (next) selectEntry(next)
+  renderMoveList()
 }
 
 // ---- Learner input -----------------------------------------------------------
@@ -136,7 +175,7 @@ function readLearner(dt: number) {
       return
     }
     const pose = poseFromLandmarks(lm, { aspect, flipX: true, facingAway: false })
-    user = { pose, feats: computeFeatures(pose), aspect }
+    user = { pose, feats: computeFeatures(pose, ref.posture), aspect }
   } else if (source === 'sim') {
     if (follower.state === 'following' && !sim.paused) {
       sim.pos = Math.min(ref.poses.length - 1, sim.pos + sim.speed * ref.fps * dt)
@@ -145,7 +184,7 @@ function readLearner(dt: number) {
     const base = ref.poses[Math.round(sim.pos)]
     const pose = {} as Pose
     for (const [k, p] of Object.entries(base)) pose[k as keyof Pose] = { x: p.x + jitter(), y: p.y + jitter(), v: 0.95 }
-    user = { pose, feats: computeFeatures(pose), aspect: ref.aspect }
+    user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
   }
 }
 
@@ -177,6 +216,7 @@ function drawFigure(ctx: CanvasRenderingContext2D, p: Pose, view: View) {
   )
   const w = T * view.s * 0.2
   ctx.save()
+  if (ref.posture === 'seated') drawStool(ctx, p, view, T)
   ctx.fillStyle = INK
   ctx.globalAlpha = 0.9
   ctx.beginPath()
@@ -191,6 +231,32 @@ function drawFigure(ctx: CanvasRenderingContext2D, p: Pose, view: View) {
   const [hx, hy] = toPx(view, p.head)
   ctx.beginPath()
   ctx.arc(hx, hy, T * view.s * 0.26, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+/** A pale stool under a seated figure: the seat just below the hips, legs to the floor behind the shins. */
+function drawStool(ctx: CanvasRenderingContext2D, p: Pose, view: View, T: number) {
+  const cx = (p.lHip.x + p.rHip.x) / 2
+  const seatY = (p.lHip.y + p.rHip.y) / 2 + 0.1 * T
+  const floorY = Math.max(p.lAnkle.y, p.rAnkle.y)
+  const px = (x: number, y: number) => toPx(view, { x, y, v: 1 })
+  ctx.save()
+  ctx.globalAlpha = 0.3
+  ctx.fillStyle = INK
+  ctx.strokeStyle = INK
+  ctx.lineCap = 'round'
+  ctx.lineWidth = 0.08 * T * view.s
+  for (const side of [-1, 1]) {
+    ctx.beginPath()
+    ctx.moveTo(...px(cx + side * 0.4 * T, seatY))
+    ctx.lineTo(...px(cx + side * 0.46 * T, floorY))
+    ctx.stroke()
+  }
+  const [x0, y0] = px(cx - 0.55 * T, seatY - 0.05 * T)
+  const [x1, y1] = px(cx + 0.55 * T, seatY + 0.07 * T)
+  ctx.beginPath()
+  ctx.roundRect(x0, y0, x1 - x0, y1 - y0, (y1 - y0) / 2)
   ctx.fill()
   ctx.restore()
 }
@@ -236,7 +302,7 @@ function drawTeacher(lead: number) {
   if (user && $<HTMLInputElement>('ghost').checked) {
     const here = ref.poses[follower.frame]
     ctx.globalAlpha = 0.85
-    drawSkeleton(ctx, alignPoseTo(user.pose, here), view, () => VERMILION, 2.5 * dpr)
+    drawSkeleton(ctx, alignPoseTo(user.pose, here, ref.posture), view, () => VERMILION, 2.5 * dpr, ref.posture)
     ctx.globalAlpha = 1
   }
 }
@@ -262,7 +328,7 @@ function drawYou() {
   if (!user) return
   const target = follower.state === 'waiting' ? ref.feats[0] : ref.feats[follower.frame]
   segmentErrors(user.feats, target, errs)
-  drawSkeleton(ctx, user.pose, view, (i) => errorColor(errs[i]), 6 * dpr)
+  drawSkeleton(ctx, user.pose, view, (i) => errorColor(errs[i]), 6 * dpr, ref.posture)
 }
 
 function drawTimeline() {
@@ -313,9 +379,20 @@ function updateReadout() {
   const f = follower
   $('holdTag').hidden = !(f.state === 'following' && f.inHold)
   if (source === 'none') setStatus('Start the camera to begin.')
-  else if (!user) setStatus('Step back until your whole body is in view.')
+  else if (!user)
+    setStatus(
+      ref.posture === 'seated'
+        ? 'Sit back until your head, shoulders and waist are in view.'
+        : 'Step back until your whole body is in view.',
+    )
   else if (f.state === 'waiting')
-    setStatus(f.startProgress > 0 ? 'Good. Hold the opening pose…' : "Stand in the teacher's opening pose.")
+    setStatus(
+      f.startProgress > 0
+        ? 'Good. Hold the opening pose…'
+        : ref.posture === 'seated'
+          ? "Sit in the teacher's opening pose."
+          : "Stand in the teacher's opening pose.",
+    )
   else if (f.state === 'done') setStatus('Complete. Restart when you are ready.')
   else if (f.lost) setStatus("Find the teacher's shape. They'll wait for you.")
   else if (f.inHold) setStatus('Hold, and breathe.')
@@ -407,6 +484,8 @@ $<HTMLInputElement>('videoFile').addEventListener('change', async (e) => {
       id: `video-${entries.length}`,
       name: `Video: ${video.name}`,
       cue: 'Mirror the teacher. They move only as fast as you do.',
+      // Seated practice of a video just ignores the teacher's hips and legs.
+      postures: [...POSTURES],
       video,
     }
     entries.push(e)
@@ -419,6 +498,9 @@ $<HTMLInputElement>('videoFile').addEventListener('change', async (e) => {
   }
 })
 
-renderMoveList()
-selectEntry(entry)
+for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button')) {
+  b.addEventListener('click', () => setPosture(b.dataset.posture as Posture))
+}
+
+setPosture(posture)
 requestAnimationFrame(frame)

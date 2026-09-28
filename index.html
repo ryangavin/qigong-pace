@@ -19,6 +19,10 @@
         <p class="sub">The teacher moves only as you move.</p>
       </div>
       <div class="move-pick">
+        <div id="posture" class="segmented" role="group" aria-label="Posture">
+          <button type="button" data-posture="standing" aria-pressed="true">Standing</button>
+          <button type="button" data-posture="seated" aria-pressed="false">Seated</button>
+        </div>
         <select id="move" aria-label="Move"></select>
         <label class="button quiet" for="videoFile">Learn from a video…</label>
         <input id="videoFile" type="file" accept="video/*" hidden />
@@ -37,7 +41,7 @@
         <canvas id="you"></canvas>
         <span class="tag">You</span>
         <div id="youEmpty" class="empty">
-          <p>Stand back so your whole body is in view, facing the screen.</p>
+          <p id="youEmptyHint">Stand back so your whole body is in view, facing the screen.</p>
           <button id="startCamera" class="button">Start camera</button>
           <button id="startSim" class="button quiet">Try with a simulated student</button>
           <p id="cameraError" class="error" hidden></p>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Follower, type Reference } from './follower'
 import { DEMO_MOVES, referenceFromMove } from './moves'
-import { computeFeatures, distance, JOINTS, type Features, type Pose } from './skeleton'
+import { computeFeatures, distance, JOINTS, SEGMENTS, type Features, type Joint, type Pose } from './skeleton'
 
 const DT = 1 / 30
 
@@ -127,5 +127,91 @@ describe('Follower', () => {
     for (let i = 0; i < 90; i++) f.update(noisy(other.poses[Math.round(6 * other.fps)], rand), DT)
     expect(f.lost).toBe(true)
     expect(f.pos - before).toBeLessThan(0.3 * lift.fps)
+  })
+})
+
+// A learner at a desk: the camera sees them from the waist up. MediaPipe still
+// guesses at the hips and legs, below the frame and with low visibility.
+const LOWER: Joint[] = ['lHip', 'rHip', 'lKnee', 'rKnee', 'lAnkle', 'rAnkle']
+
+function seatedLearner(p: Pose, rand: () => number, amount = 0.006): Features {
+  const out = {} as Pose
+  for (const j of JOINTS) out[j] = { x: p[j].x + rand() * amount, y: p[j].y + rand() * amount, v: 0.95 }
+  for (const j of LOWER) out[j] = { x: p[j].x + rand() * 0.2, y: 1.1 + rand() * 0.2, v: 0.1 }
+  return computeFeatures(out, 'seated')
+}
+
+describe('Seated practice', () => {
+  const seated = referenceFromMove(DEMO_MOVES[0], 'seated')
+
+  it('offers every built-in move both ways', () => {
+    for (const m of DEMO_MOVES) expect(m.postures).toEqual(['standing', 'seated'])
+  })
+
+  it('draws the teacher seated, without sinking', () => {
+    expect(seated.posture).toBe('seated')
+    const hipY = seated.poses[0].lHip.y
+    for (const p of seated.poses) expect(p.lHip.y).toBeCloseTo(hipY, 6)
+    // Thighs toward the viewer read short: far less hip-to-knee drop than standing.
+    const standing = lift.poses[0]
+    const s = seated.poses[0]
+    expect(s.lKnee.y - s.lHip.y).toBeLessThan(0.4 * (standing.lKnee.y - standing.lHip.y))
+  })
+
+  it('ignores the hips and legs and does not measure the body by them', () => {
+    const p = seated.poses[Math.round(6 * seated.fps)]
+    const moved = { ...p, lHip: { x: 0.1, y: 1.3, v: 0.1 }, rHip: { x: 1.2, y: 1.5, v: 0.1 } }
+    const a = computeFeatures(p, 'seated')
+    const b = computeFeatures(moved, 'seated')
+    expect(Array.from(b.vec)).toEqual(Array.from(a.vec))
+    SEGMENTS.forEach((s, i) => {
+      if (s.lower) expect(a.vis[i]).toBe(0)
+      else expect(a.vis[i]).toBeGreaterThan(0)
+    })
+  })
+
+  it('leaves standing features as they were', () => {
+    const p = lift.poses[Math.round(6 * lift.fps)]
+    expect(Array.from(computeFeatures(p, 'standing').vec)).toEqual(Array.from(computeFeatures(p).vec))
+    expect(lift.posture).toBe('standing')
+  })
+
+  it('starts when the learner takes the opening pose', () => {
+    const f = new Follower(seated)
+    const rand = rng(11)
+    const armsUp = seated.poses[Math.round(9 * seated.fps)]
+    for (let i = 0; i < 90; i++) f.update(seatedLearner(armsUp, rand), DT)
+    expect(f.state).toBe('waiting')
+    for (let i = 0; i < 30; i++) f.update(seatedLearner(seated.poses[0], rand), DT)
+    expect(f.state).toBe('following')
+  })
+
+  it.each([0.5, 1])('follows a learner moving at %s× speed to the end', (speed) => {
+    const f = new Follower(seated)
+    const rand = rng(12)
+    let learner = 0
+    const seconds = 2 + seated.poses.length / seated.fps / speed + 3
+    for (let t = 0; t < seconds; t += DT) {
+      if (f.state === 'following') learner = Math.min(seated.poses.length - 1, learner + speed * seated.fps * DT)
+      f.update(seatedLearner(seated.poses[Math.round(learner)], rand), DT)
+      if (learner > 0) expect(distance(seated.feats[Math.round(learner)], seated.feats[f.frame])).toBeLessThan(0.1)
+    }
+    expect(f.state).toBe('done')
+  })
+
+  it('runs a hold at real time while the learner holds the shape', () => {
+    const f = new Follower(seated)
+    const rand = rng(13)
+    for (let i = 0; i < 30; i++) f.update(seatedLearner(seated.poses[0], rand), DT)
+    let learner = 0
+    const top = Math.round(8.5 * seated.fps)
+    while (f.pos < top - 2) {
+      learner = Math.min(top, learner + seated.fps * DT)
+      f.update(seatedLearner(seated.poses[Math.round(learner)], rand), DT)
+    }
+    const start = f.pos
+    for (let i = 0; i < 30; i++) f.update(seatedLearner(seated.poses[top], rand), DT)
+    expect((f.pos - start) / seated.fps).toBeGreaterThan(0.7)
+    expect((f.pos - start) / seated.fps).toBeLessThan(1.4)
   })
 })

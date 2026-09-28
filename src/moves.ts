@@ -1,5 +1,5 @@
 import { buildReference, type Reference } from './follower'
-import type { Pose, Pt } from './skeleton'
+import type { Pose, Posture, Pt } from './skeleton'
 
 // Built-in moves, authored as keyframes of a front-on figure so the app works
 // before anyone loads a video. Angles are in degrees, seen from the front.
@@ -13,7 +13,7 @@ export interface BodyKey {
   lElbow: number
   rArm: number
   rElbow: number
-  /** Knee bend, 0 (standing) to 1 (deep horse stance). */
+  /** Knee bend, 0 (standing) to 1 (deep horse stance). Ignored when seated. */
   sink: number
 }
 
@@ -21,6 +21,13 @@ export interface Move {
   id: string
   name: string
   cue: string
+  /**
+   * Which ways the move can be practised. The move list only offers moves for
+   * the learner's chosen posture. A seated move is driven by the same keys
+   * (arms only; `sink` is ignored) with the figure sitting on a stool, so list
+   * 'seated' only where the arms alone carry the move.
+   */
+  postures: Posture[]
   keys: BodyKey[]
 }
 
@@ -31,6 +38,7 @@ export const DEMO_MOVES: Move[] = [
     id: 'lift-sky',
     name: 'Holding up the sky',
     cue: 'Float the arms up the sides, press the palms to the sky, then sink as they fall.',
+    postures: ['standing', 'seated'],
     keys: [
       rest(0),
       rest(1.5),
@@ -46,6 +54,7 @@ export const DEMO_MOVES: Move[] = [
     id: 'separate',
     name: 'Separating heaven and earth',
     cue: 'One palm pushes to the sky while the other presses to the earth. Change sides.',
+    postures: ['standing', 'seated'],
     keys: [
       rest(0),
       rest(1.5),
@@ -62,6 +71,7 @@ export const DEMO_MOVES: Move[] = [
     id: 'open-close',
     name: 'Opening and closing',
     cue: 'Arms open wide as you rise, fold back to the belly as you sink.',
+    postures: ['standing', 'seated'],
     keys: [
       rest(0),
       rest(1.5),
@@ -116,11 +126,17 @@ function sample(keys: BodyKey[], t: number): BodyKey {
 
 const deg = Math.PI / 180
 
-export function poseAt(k: BodyKey): Pose {
+// Seated on a stool the thighs point at the viewer, so from the front they
+// read as a short drop from hip to knee.
+const SEATED_THIGH_DROP = 0.2
+
+export function poseAt(k: BodyKey, posture: Posture = 'standing'): Pose {
   const T = BODY.torso
   const cx = DEMO_ASPECT / 2
+  const seated = posture === 'seated'
   // Sinking: the thighs come forward, so from the front they look shorter and the knees open a little.
-  const thighDrop = BODY.thigh * (1 - 0.45 * k.sink)
+  const sink = seated ? 0 : k.sink
+  const thighDrop = seated ? SEATED_THIGH_DROP : BODY.thigh * (1 - 0.45 * sink)
   const hipY = GROUND - (thighDrop + BODY.shin) * T
   const shoulderY = hipY - T
   const p = (x: number, y: number): Pt => ({ x, y, v: 1 })
@@ -138,8 +154,9 @@ export function poseAt(k: BodyKey): Pose {
   }
   const leg = (side: -1 | 1) => {
     const hx = cx + side * BODY.hipHalf * T
-    const ax = cx + side * BODY.stanceHalf * T
-    const kx = (hx + ax) / 2 + side * 0.12 * k.sink * T
+    // Seated, the knees sit a little wider than the hips with the shins straight down.
+    const ax = cx + side * (seated ? BODY.hipHalf + 0.1 : BODY.stanceHalf) * T
+    const kx = seated ? ax : (hx + ax) / 2 + side * 0.12 * sink * T
     const ky = hipY + thighDrop * T
     return [p(hx, hipY), p(kx, ky), p(ax, GROUND)] as const
   }
@@ -166,9 +183,9 @@ export function poseAt(k: BodyKey): Pose {
 
 export const DEMO_FPS = 30
 
-export function referenceFromMove(move: Move): Reference {
+export function referenceFromMove(move: Move, posture: Posture = 'standing'): Reference {
   const end = move.keys[move.keys.length - 1].t
   const poses: Pose[] = []
-  for (let i = 0; i <= Math.round(end * DEMO_FPS); i++) poses.push(poseAt(sample(move.keys, i / DEMO_FPS)))
-  return buildReference(move.name, DEMO_FPS, DEMO_ASPECT, poses)
+  for (let i = 0; i <= Math.round(end * DEMO_FPS); i++) poses.push(poseAt(sample(move.keys, i / DEMO_FPS), posture))
+  return buildReference(move.name, DEMO_FPS, DEMO_ASPECT, poses, posture)
 }

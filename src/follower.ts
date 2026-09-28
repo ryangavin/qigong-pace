@@ -1,4 +1,4 @@
-import { computeFeatures, distance, type Features, type Pose } from './skeleton'
+import { computeFeatures, distance, type Features, type Pose, type Posture } from './skeleton'
 
 /** A move to learn: the teacher's pose at a fixed frame rate. */
 export interface Reference {
@@ -6,6 +6,8 @@ export interface Reference {
   fps: number
   /** Width / height of the teacher's image. */
   aspect: number
+  /** How `feats` were measured; the learner's features must be measured the same way. */
+  posture: Posture
   poses: Pose[]
   feats: Features[]
   /** How fast the teacher's shape is changing at each frame, per second. Near zero during holds. */
@@ -14,8 +16,14 @@ export interface Reference {
 
 const LOOKAHEAD_SEC = 0.3
 
-export function buildReference(name: string, fps: number, aspect: number, poses: Pose[]): Reference {
-  const feats = poses.map(computeFeatures)
+export function buildReference(
+  name: string,
+  fps: number,
+  aspect: number,
+  poses: Pose[],
+  posture: Posture = 'standing',
+): Reference {
+  const feats = poses.map((p) => computeFeatures(p, posture))
   const n = feats.length
   const k = Math.max(1, Math.round(LOOKAHEAD_SEC * fps))
   // Measured over a short look-ahead rather than frame to frame, so tracker
@@ -25,7 +33,7 @@ export function buildReference(name: string, fps: number, aspect: number, poses:
     const j = Math.min(n - 1, i + k)
     motion[i] = j === i ? 0 : (distance(feats[i], feats[j]) * fps) / (j - i)
   }
-  return { name, fps, aspect, poses, feats, motion }
+  return { name, fps, aspect, posture, poses, feats, motion }
 }
 
 export interface FollowerOptions {
