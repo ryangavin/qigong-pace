@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { Follower, type Reference } from './follower'
-import { DEMO_MOVES, referenceFromMove } from './moves'
-import { computeFeatures, distance, JOINTS, SEGMENTS, type Features, type Joint, type Pose } from './skeleton'
+import { DEMO_MOVES, referenceFromMove, sample, type BodyKey, type Move } from './moves'
+import {
+  computeFeatures,
+  distance,
+  JOINTS,
+  SEGMENTS,
+  type Features,
+  type Joint,
+  type Pose,
+  type Posture,
+} from './skeleton'
 
 const DT = 1 / 30
 
@@ -34,7 +43,36 @@ function simulate(ref: Reference, speed: (t: number) => number, seconds: number)
   return { f, log }
 }
 
-const lift = referenceFromMove(DEMO_MOVES[0])
+// The follower tests use the app's original "Holding up the sky": the times
+// below (arms rising 1.5–8.5s, held overhead to 11s) refer to its keys.
+const key = (t: number, lArm: number, lElbow: number, rArm: number, rElbow: number, sink: number): BodyKey => ({
+  t,
+  lArm,
+  lElbow,
+  rArm,
+  rElbow,
+  sink,
+})
+const LIFT: Move = {
+  id: 'lift-sky-original',
+  name: 'Holding up the sky',
+  set: 'Ba Duan Jin',
+  tier: 1,
+  cue: '',
+  postures: ['standing', 'seated'],
+  keys: [
+    key(0, 12, 70, 12, 70, 0),
+    key(1.5, 12, 70, 12, 70, 0),
+    key(5, 90, 5, 90, 5, 0),
+    key(8.5, 168, 25, 168, 25, 0),
+    key(11, 168, 25, 168, 25, 0),
+    key(14.5, 90, 0, 90, 0, 0.55),
+    key(18, 12, 70, 12, 70, 0.2),
+    key(20, 12, 70, 12, 70, 0),
+  ],
+}
+
+const lift = referenceFromMove(LIFT)
 const moving = (ref: Reference, i: number) => ref.motion[Math.round(i)] > 0.08
 
 describe('Follower', () => {
@@ -123,7 +161,7 @@ describe('Follower', () => {
     for (let i = 0; i < 30; i++) f.update(noisy(lift.poses[0], rand), DT)
     const before = f.pos
     // Separating heaven and earth, one arm up: nowhere near the start of Holding up the sky.
-    const other = referenceFromMove(DEMO_MOVES[1])
+    const other = referenceFromMove(DEMO_MOVES.find((m) => m.id === 'separate')!)
     for (let i = 0; i < 90; i++) f.update(noisy(other.poses[Math.round(6 * other.fps)], rand), DT)
     expect(f.lost).toBe(true)
     expect(f.pos - before).toBeLessThan(0.3 * lift.fps)
@@ -142,10 +180,21 @@ function seatedLearner(p: Pose, rand: () => number, amount = 0.006): Features {
 }
 
 describe('Seated practice', () => {
-  const seated = referenceFromMove(DEMO_MOVES[0], 'seated')
+  const seated = referenceFromMove(LIFT, 'seated')
 
-  it('offers every built-in move both ways', () => {
-    for (const m of DEMO_MOVES) expect(m.postures).toEqual(['standing', 'seated'])
+  it('offers a built-in move seated unless it needs the legs', () => {
+    // The catalog's "partial" seated moves.
+    const standingOnly = ['shaking', 'three-plates', 'chui', 'pluck-star', 'deer-antlers']
+    for (const m of DEMO_MOVES) {
+      expect(m.postures).toEqual(standingOnly.includes(m.id) ? ['standing'] : ['standing', 'seated'])
+    }
+  })
+
+  it('gives seated moves a cue without the legs', () => {
+    for (const m of DEMO_MOVES) {
+      if (!m.postures.includes('seated')) continue
+      expect(m.seatedCue ?? m.cue).not.toMatch(/sink|squat|stance|weight|knee/i)
+    }
   })
 
   it('draws the teacher seated, without sinking', () => {
@@ -214,4 +263,54 @@ describe('Seated practice', () => {
     expect((f.pos - start) / seated.fps).toBeGreaterThan(0.7)
     expect((f.pos - start) / seated.fps).toBeLessThan(1.4)
   })
+})
+
+describe('Built-in moves', () => {
+  it('have unique ids, and a tier 2 move says what the front view loses', () => {
+    expect(new Set(DEMO_MOVES.map((m) => m.id)).size).toBe(DEMO_MOVES.length)
+    for (const m of DEMO_MOVES) {
+      // He is tier 2 in the catalog but loses nothing from the front.
+      if (m.tier === 2 && m.id !== 'he') expect(m.lost).toBeTruthy()
+      if (m.tier === 1) expect(m.lost).toBeUndefined()
+    }
+  })
+
+  it('jump between two keys that share a time', () => {
+    const at = (t: number, lArm: number) => ({ t, lArm, lElbow: 0, rArm: 0, rElbow: 0, sink: 0 })
+    const keys = [at(0, 0), at(1, 90), at(1, -270), at(2, -270)]
+    expect(sample(keys, 1).lArm).toBe(90)
+    expect(sample(keys, 1.001).lArm).toBeCloseTo(-270, 3)
+    for (let t = 0; t <= 2; t += 1 / 60) expect(Number.isFinite(sample(keys, t).lArm)).toBe(true)
+    // And a catalog move that relies on it draws finite poses throughout.
+    const lifted = referenceFromMove(DEMO_MOVES.find((m) => m.id === 'lift-sky')!)
+    for (const p of lifted.poses) for (const j of JOINTS) expect(Number.isFinite(p[j].x + p[j].y)).toBe(true)
+  })
+
+  // Known follower limit: standing, these moves change slowly and subtly (a few
+  // degrees of arm, or the legs alone), so their motion is under `holdMotion`.
+  // The follower plays them as holds at real time and pulls ahead of a
+  // half-speed learner. They're expected to fail until the follower handles it.
+  const SLOW_AND_SUBTLE = ['scoop-sea standing', 'bear-waist standing', 'he standing', 'gather-qi standing']
+  const cases = DEMO_MOVES.flatMap((m) => m.postures.map((p) => [m.id, p] as const))
+  const known = (id: string, p: Posture) => SLOW_AND_SUBTLE.includes(`${id} ${p}`)
+
+  const follows = (id: string, posture: Posture) => {
+    const ref = referenceFromMove(DEMO_MOVES.find((m) => m.id === id)!, posture)
+    const learnerSees = posture === 'seated' ? seatedLearner : noisy
+    const f = new Follower(ref)
+    const rand = rng(21)
+    let learner = 0
+    let worst = 0
+    const seconds = 2 + ref.poses.length / ref.fps / 0.5 + 3
+    for (let t = 0; t < seconds; t += DT) {
+      if (f.state === 'following') learner = Math.min(ref.poses.length - 1, learner + 0.5 * ref.fps * DT)
+      f.update(learnerSees(ref.poses[Math.round(learner)], rand), DT)
+      if (learner > 0) worst = Math.max(worst, distance(ref.feats[Math.round(learner)], ref.feats[f.frame]))
+    }
+    expect(f.state).toBe('done')
+    expect(worst).toBeLessThan(0.1)
+  }
+
+  it.each(cases.filter(([id, p]) => !known(id, p)))('%s can be followed %s at half speed to the end', follows)
+  it.fails.each(cases.filter(([id, p]) => known(id, p)))('%s drifts ahead of a half-speed learner %s', follows)
 })

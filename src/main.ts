@@ -1,6 +1,6 @@
 import { buildReference, Follower, type Reference } from './follower'
 import { analyzeVideo, type VideoTeacher } from './extract'
-import { DEMO_MOVES, referenceFromMove } from './moves'
+import { DEMO_MOVES, MOVE_SETS, referenceFromMove } from './moves'
 import { PoseTracker } from './pose'
 import {
   alignPoseTo,
@@ -32,10 +32,17 @@ const PAPER_DEEP = '#e8e0cf'
 interface Entry {
   id: string
   name: string
+  /** The move list's group. */
+  set: string
   cue: string
+  seatedCue?: string
+  /** What the front-on teacher can't show. */
+  lost?: string
   postures: Posture[]
   video?: VideoTeacher
 }
+
+const VIDEO_SET = 'Videos'
 
 // ---- Posture -----------------------------------------------------------------
 
@@ -53,7 +60,15 @@ function loadPosture(): Posture {
 
 let posture = loadPosture()
 
-const entries: Entry[] = DEMO_MOVES.map((m) => ({ id: m.id, name: m.name, cue: m.cue, postures: m.postures }))
+const entries: Entry[] = DEMO_MOVES.map((m) => ({
+  id: m.id,
+  name: m.name,
+  set: m.set,
+  cue: m.cue,
+  seatedCue: m.seatedCue,
+  lost: m.lost,
+  postures: m.postures,
+}))
 const available = () => entries.filter((e) => e.postures.includes(posture))
 let entry = available()[0] ?? entries[0]
 let ref: Reference = buildRef(entry)
@@ -77,7 +92,8 @@ function selectEntry(e: Entry) {
   ref = built
   const opts = follower.opts
   follower = new Follower(ref, opts)
-  $('cue').textContent = e.cue
+  $('cue').textContent = posture === 'seated' && e.seatedCue ? e.seatedCue : e.cue
+  $('lost').textContent = e.lost ? `Not shown from the front: ${e.lost}.` : ''
   $('facingWrap').hidden = !e.video
   sim.pos = 0
 }
@@ -85,11 +101,18 @@ function selectEntry(e: Entry) {
 function renderMoveList() {
   const select = $<HTMLSelectElement>('move')
   select.innerHTML = ''
-  for (const e of available()) {
-    const o = document.createElement('option')
-    o.value = e.id
-    o.textContent = e.name
-    select.append(o)
+  for (const set of [...MOVE_SETS, VIDEO_SET]) {
+    const inSet = available().filter((e) => e.set === set)
+    if (!inSet.length) continue
+    const group = document.createElement('optgroup')
+    group.label = set
+    for (const e of inSet) {
+      const o = document.createElement('option')
+      o.value = e.id
+      o.textContent = e.name
+      group.append(o)
+    }
+    select.append(group)
   }
   select.value = entry.id
 }
@@ -483,6 +506,7 @@ $<HTMLInputElement>('videoFile').addEventListener('change', async (e) => {
     const e: Entry = {
       id: `video-${entries.length}`,
       name: `Video: ${video.name}`,
+      set: VIDEO_SET,
       cue: 'Mirror the teacher. They move only as fast as you do.',
       // Seated practice of a video just ignores the teacher's hips and legs.
       postures: [...POSTURES],

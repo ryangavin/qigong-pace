@@ -10,6 +10,7 @@ through the webcam, matches its pose.
   `Posture` ('standing' | 'seated') decides which segments count and how the body is scaled.
 - `src/follower.ts`: `Reference` (a teacher's move) and `Follower`, which keeps the teacher in step with the learner.
 - `src/moves.ts`: built-in moves as keyframes, and the figure drawn from them. Each `Move` lists the `postures` it supports.
+  Keys are transcribed exactly from `docs/move-catalog.md` (the spec), one line per move.
 - `src/main.ts`, `index.html`, `src/style.css`: the app.
 
 ## Tests and checks
