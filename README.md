@@ -41,3 +41,7 @@ working without a camera.
 
 See [AGENTS.md](AGENTS.md) for the layout and the test commands
 (`npm test`, `npm run check`, `npm run build`).
+
+## License
+
+[MIT](LICENSE)
