@@ -1,0 +1,89 @@
+/* The calibration page: the primary view's room and words (src/primary/style.css), with a few additions. */
+
+.step {
+  font-size: clamp(19px, 2vw, 24px);
+  font-style: italic;
+  color: var(--mist);
+}
+
+.intro #posture {
+  margin: 0 0 22px;
+}
+
+/* The posture is chosen as in the primary view: words, not buttons. */
+.intro #posture button {
+  font-size: 20px;
+  font-style: italic;
+  padding: 2px 0;
+  box-shadow: none;
+}
+
+.intro .fine {
+  max-width: 30em;
+  margin: 26px 0 0;
+  font-size: 16px;
+  font-style: normal;
+  line-height: 1.45;
+  color: rgba(236, 228, 212, 0.5);
+}
+
+/* The summary scrolls, if it must, over the dimmed room. */
+.summary {
+  justify-content: flex-start;
+  overflow-y: auto;
+  padding: clamp(40px, 10vh, 96px) 16px 48px;
+  background: rgba(4, 5, 9, 0.72);
+}
+
+.summary h1 {
+  font-size: clamp(38px, 5vw, 60px);
+}
+
+.summary ul {
+  max-width: 34em;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  font-size: clamp(18px, 1.8vw, 21px);
+  line-height: 1.45;
+  color: var(--mist);
+}
+
+.summary li + li {
+  margin-top: 10px;
+}
+
+.summary .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+  align-items: baseline;
+  justify-content: center;
+  margin-top: 28px;
+}
+
+.summary .actions button {
+  font-size: 20px;
+}
+
+.summary .actions .quiet {
+  margin: 0;
+}
+
+/* Hands go overhead here, so the countdown sits low, above the prompt, rather than up top. */
+.hint {
+  top: auto;
+  bottom: calc(clamp(48px, 11vh, 110px) + 3.6em);
+}
+
+@media (max-width: 640px) {
+  .hint {
+    top: auto;
+  }
+}
+
+.hint.count {
+  font-size: clamp(22px, 2.4vw, 30px);
+  color: var(--lumen);
+}
