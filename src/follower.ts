@@ -47,6 +47,8 @@ export interface FollowerOptions {
   maxRate: number
   /** Below this motion the teacher is holding still, and the hold plays at real time while the learner holds too. */
   holdMotion: number
+  /** How much worse the frame a moment into a hold may match the learner, and the hold still run at real time. */
+  holdTolerance: number
   /** Mean segment mismatch (torso lengths) that counts as "in the pose". */
   matchThreshold: number
   /** Past matchThreshold × this, the learner is lost and the teacher waits. */
@@ -62,6 +64,7 @@ export const DEFAULT_OPTIONS: FollowerOptions = {
   smoothingSec: 0.15,
   maxRate: 5,
   holdMotion: 0.08,
+  holdTolerance: 0.01,
   matchThreshold: 0.22,
   lostFactor: 1.5,
   startHoldSec: 0.6,
@@ -78,7 +81,9 @@ export type FollowState = 'waiting' | 'following' | 'done'
  * backwards: if the learner stops, the teacher stops; if they go back, the
  * teacher waits for them to come forward again. Where the teacher is holding
  * still, every frame looks alike, so instead the hold runs at real time while
- * the learner holds the shape too.
+ * the learner holds the shape too, as long as the teacher a moment later
+ * matches them as well. Slow, subtle movement also reads as a hold; there the
+ * frame ahead matches worse, so the teacher keeps to the learner's pace.
  */
 export class Follower {
   state: FollowState = 'waiting'
@@ -168,7 +173,13 @@ export class Follower {
       step = (best - this.pos) * (1 - Math.exp(-dt / opts.smoothingSec))
     }
     if (this.inHold && this.distance < opts.matchThreshold) {
-      step = Math.max(step, dt * fps)
+      // Slow or subtle movement can read as a hold too. Only run it at real
+      // time if the teacher a moment on still matches the learner as well:
+      // true in a hold, but not where the teacher would pull away from them.
+      const ahead = Math.min(n - 1, this.frame + Math.max(1, Math.round(LOOKAHEAD_SEC * fps)))
+      if (distance(user, ref.feats[ahead]) <= this.distance + opts.holdTolerance) {
+        step = Math.max(step, dt * fps)
+      }
     }
     step = Math.min(step, opts.maxRate * fps * dt)
     this.pos += step

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { Follower, type Reference } from './follower'
+import { buildReference, Follower, type Reference } from './follower'
 import { DEMO_MOVES, referenceFromMove, sample, type BodyKey, type Move } from './moves'
 import {
+  cleanTrack,
   computeFeatures,
   distance,
   JOINTS,
@@ -155,6 +156,30 @@ describe('Follower', () => {
     expect((f.pos - start) / lift.fps).toBeLessThan(1.4)
   })
 
+  it('runs a video hold at real time despite tracker jitter', () => {
+    // A video of the move: every frame jitters, and is smoothed as an imported video is.
+    const jitter = rng(8)
+    const track = lift.poses.map((p) => {
+      const out = {} as Pose
+      for (const j of JOINTS) out[j] = { x: p[j].x + jitter() * 0.01, y: p[j].y + jitter() * 0.01, v: 0.95 }
+      return out
+    })
+    const video = buildReference('video', lift.fps, lift.aspect, cleanTrack(track))
+    const f = new Follower(video)
+    const rand = rng(9)
+    for (let i = 0; i < 30; i++) f.update(noisy(video.poses[0], rand), DT)
+    let learner = 0
+    const top = Math.round(8.5 * video.fps)
+    while (f.pos < top - 2) {
+      learner = Math.min(top, learner + video.fps * DT)
+      f.update(noisy(lift.poses[Math.round(learner)], rand), DT)
+    }
+    const start = f.pos
+    for (let i = 0; i < 30; i++) f.update(noisy(lift.poses[top], rand), DT)
+    expect((f.pos - start) / video.fps).toBeGreaterThan(0.7)
+    expect((f.pos - start) / video.fps).toBeLessThan(1.4)
+  })
+
   it('waits when the learner is lost', () => {
     const f = new Follower(lift)
     const rand = rng(6)
@@ -286,24 +311,21 @@ describe('Built-in moves', () => {
     for (const p of lifted.poses) for (const j of JOINTS) expect(Number.isFinite(p[j].x + p[j].y)).toBe(true)
   })
 
-  // Known follower limit: standing, these moves change slowly and subtly (a few
-  // degrees of arm, or the legs alone), so their motion is under `holdMotion`.
-  // The follower plays them as holds at real time and pulls ahead of a
-  // half-speed learner. They're expected to fail until the follower handles it.
-  const SLOW_AND_SUBTLE = ['scoop-sea standing', 'bear-waist standing', 'he standing', 'gather-qi standing']
+  // Standing, some moves change slowly and subtly (a few degrees of arm, or the
+  // legs alone), so their motion is under `holdMotion`. The teacher must still
+  // not pull ahead of a slow learner there.
   const cases = DEMO_MOVES.flatMap((m) => m.postures.map((p) => [m.id, p] as const))
-  const known = (id: string, p: Posture) => SLOW_AND_SUBTLE.includes(`${id} ${p}`)
 
-  const follows = (id: string, posture: Posture) => {
+  const follows = (id: string, posture: Posture, speed = 0.5) => {
     const ref = referenceFromMove(DEMO_MOVES.find((m) => m.id === id)!, posture)
     const learnerSees = posture === 'seated' ? seatedLearner : noisy
     const f = new Follower(ref)
     const rand = rng(21)
     let learner = 0
     let worst = 0
-    const seconds = 2 + ref.poses.length / ref.fps / 0.5 + 3
+    const seconds = 2 + ref.poses.length / ref.fps / speed + 3
     for (let t = 0; t < seconds; t += DT) {
-      if (f.state === 'following') learner = Math.min(ref.poses.length - 1, learner + 0.5 * ref.fps * DT)
+      if (f.state === 'following') learner = Math.min(ref.poses.length - 1, learner + speed * ref.fps * DT)
       f.update(learnerSees(ref.poses[Math.round(learner)], rand), DT)
       if (learner > 0) worst = Math.max(worst, distance(ref.feats[Math.round(learner)], ref.feats[f.frame]))
     }
@@ -311,6 +333,7 @@ describe('Built-in moves', () => {
     expect(worst).toBeLessThan(0.1)
   }
 
-  it.each(cases.filter(([id, p]) => !known(id, p)))('%s can be followed %s at half speed to the end', follows)
-  it.fails.each(cases.filter(([id, p]) => known(id, p)))('%s drifts ahead of a half-speed learner %s', follows)
+  it.each(cases)('%s can be followed %s at half speed to the end', (id, p) => follows(id, p))
+  // Its 3.5–6s stretch barely moves the arms: the default move, slower still.
+  it('lift-sky can be followed standing at quarter speed to the end', () => follows('lift-sky', 'standing', 0.25))
 })
