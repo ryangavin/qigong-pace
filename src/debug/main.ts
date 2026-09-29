@@ -1,16 +1,18 @@
 import { buildReference, Follower, type Reference } from '../follower'
 import { analyzeVideo, type VideoTeacher } from '../extract'
 import { DEMO_MOVES, MOVE_SETS, referenceFromMove } from '../moves'
-import { PoseTracker } from '../pose'
+import { eachVideoFrame, modelFromParams, openCamera, PoseTracker } from '../pose'
 import { loadPosture, savePosture } from '../prefs'
 import { QI_REGIONS, QiModel } from '../qi'
 import { SimStudent } from '../sim'
+import { LandmarkFilter, RateMeter } from '../smoothing'
 import {
   alignPoseTo,
   cleanTrack,
   computeFeatures,
   containView,
   drawSkeleton,
+  JOINTS,
   poseFromLandmarks,
   segmentErrors,
   SEGMENTS,
@@ -131,8 +133,14 @@ let camTracker: PoseTracker | null = null
 const cam = document.createElement('video')
 cam.muted = true
 cam.playsInline = true
-let lastCamTime = -1
 let user: { pose: Pose; feats: Features; aspect: number } | null = null
+/** The camera learner as the tracker saw them, before filtering: drawn faintly under the filtered skeleton. */
+let rawPose: Pose | null = null
+const smoother = new LandmarkFilter()
+const detections = new RateMeter()
+let stopFrames: (() => void) | null = null
+// ?model=heavy (or lite) tries another pose model.
+const model = modelFromParams(new URLSearchParams(location.search))
 
 const sim = new SimStudent()
 
@@ -141,13 +149,11 @@ async function startCamera() {
   err.hidden = true
   $('startCamera').textContent = 'Loading pose tracker…'
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      audio: false,
-    })
-    cam.srcObject = stream
+    cam.srcObject = await openCamera()
     await cam.play()
-    camTracker ??= await PoseTracker.create()
+    camTracker ??= await PoseTracker.create({ model })
+    stopFrames ??= eachVideoFrame(cam, readCamera)
+    smoother.reset()
     source = 'camera'
     $('youEmpty').hidden = true
     $('simControls').hidden = true
@@ -167,19 +173,24 @@ function startSim() {
   follower.reset()
 }
 
+/** Once per new camera frame, as the primary view does it: find the learner, and steady them. */
+function readCamera(timeMs: number) {
+  if (source !== 'camera' || !camTracker) return
+  detections.tick(timeMs)
+  const raw = camTracker.detect(cam, timeMs)
+  const lm = smoother.update(raw, timeMs)
+  const opts = { aspect: cam.videoWidth / cam.videoHeight, flipX: true, facingAway: false }
+  rawPose = raw ? poseFromLandmarks(raw, opts) : null
+  if (!lm) {
+    user = null
+    return
+  }
+  const pose = poseFromLandmarks(lm, opts)
+  user = { pose, feats: computeFeatures(pose, ref.posture), aspect: opts.aspect }
+}
+
 function readLearner(dt: number) {
-  if (source === 'camera' && camTracker && cam.readyState >= 2) {
-    if (cam.currentTime === lastCamTime) return
-    lastCamTime = cam.currentTime
-    const lm = camTracker.detect(cam, performance.now())
-    const aspect = cam.videoWidth / cam.videoHeight
-    if (!lm) {
-      user = null
-      return
-    }
-    const pose = poseFromLandmarks(lm, { aspect, flipX: true, facingAway: false })
-    user = { pose, feats: computeFeatures(pose, ref.posture), aspect }
-  } else if (source === 'sim') {
+  if (source === 'sim') {
     const pose = sim.step(follower, dt)
     user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
   }
@@ -322,6 +333,19 @@ function drawYou() {
     ctx.fillStyle = 'rgba(243, 238, 227, 0.25)'
     ctx.fillRect(view.ox, view.oy, view.w, view.h)
   }
+  if (source === 'camera' && rawPose) {
+    // The tracker's own landmarks, faint, under the filtered skeleton.
+    ctx.fillStyle = INK
+    for (const j of JOINTS) {
+      const p = rawPose[j]
+      ctx.globalAlpha = 0.15 + 0.3 * p.v
+      const [x, y] = toPx(view, p)
+      ctx.beginPath()
+      ctx.arc(x, y, 3 * dpr, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
+  }
   if (!user) return
   const target = follower.state === 'waiting' ? ref.feats[0] : ref.feats[follower.frame]
   segmentErrors(user.feats, target, errs)
@@ -418,6 +442,26 @@ function updateQiReadout() {
   $('qi').textContent =
     `qi ${n(q.level)}  breath ${s(q.breath)}  flow ${n(q.flow)}  palmField ${n(q.palmField)}  ` +
     `armFlow ${s(q.armFlow.l)} / ${s(q.armFlow.r)}\n${regions}`
+  updateTrackingReadout()
+}
+
+/** Detection rate, the camera's actual settings, and each joint's visibility as tracked → as filtered. */
+function updateTrackingReadout() {
+  if (source !== 'camera') {
+    $('tracking').textContent = ''
+    return
+  }
+  const settings = (cam.srcObject as MediaStream | null)?.getVideoTracks()[0]?.getSettings()
+  const fps = settings?.frameRate ? ` @ ${Math.round(settings.frameRate)} fps` : ''
+  const head = `detect ${detections.hz.toFixed(1)} Hz  camera ${cam.videoWidth}×${cam.videoHeight}${fps}  model ${model}`
+  const vis = JOINTS.map((j) => {
+    const r = rawPose ? rawPose[j].v.toFixed(2) : ' -- '
+    const f = user ? user.pose[j].v.toFixed(2) : ' -- '
+    return `${j} ${r}→${f}`
+  })
+  const rows: string[] = []
+  for (let i = 0; i < vis.length; i += 4) rows.push(vis.slice(i, i + 4).join('   '))
+  $('tracking').textContent = `${head}\nvisibility (raw→filtered)\n${rows.join('\n')}`
 }
 
 // ---- Loop --------------------------------------------------------------------
@@ -475,6 +519,7 @@ $('useCamera').addEventListener('click', () => {
   $('simControls').hidden = true
   source = 'none'
   user = null
+  rawPose = null
 })
 $('simPause').addEventListener('click', (e) => {
   sim.paused = !sim.paused

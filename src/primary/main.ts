@@ -1,10 +1,11 @@
 import { createEnergyLayer, PALETTE_NAMES, type EnergyLayer, type PaletteName } from '../energy'
 import { Follower, type Reference } from '../follower'
 import { DEMO_MOVES, MOVE_SETS, referenceFromMove, type Move } from '../moves'
-import { PoseTracker } from '../pose'
+import { eachVideoFrame, modelFromParams, openCamera, PoseTracker } from '../pose'
 import { loadPosture, savePosture } from '../prefs'
 import { QiModel } from '../qi'
 import { SimStudent } from '../sim'
+import { LandmarkFilter } from '../smoothing'
 import {
   alignment,
   bodyScale,
@@ -22,6 +23,7 @@ import {
 } from '../skeleton'
 import { beadFrame, Guidance, guidanceMix, handPath, holdAt, holdProgress, matchOf, wristsAt } from './guidance'
 import { Invitations } from './invitations'
+import { TrackingHints } from './tracking'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const params = new URLSearchParams(location.search)
@@ -94,7 +96,9 @@ type Source = 'none' | 'camera' | 'sim'
 let source: Source = 'none'
 let tracker: PoseTracker | null = null
 const cam = $<HTMLVideoElement>('cam')
-let lastCamTime = -1
+/** Steadies the tracker's landmarks before they become the learner's pose. */
+const smoother = new LandmarkFilter()
+let stopFrames: (() => void) | null = null
 let user: { pose: Pose; feats: Features; aspect: number } | null = null
 /** The learner eased a little, so the guidance laid on them doesn't shiver with the tracker. */
 let calm: Pose | null = null
@@ -112,14 +116,12 @@ async function startCamera() {
   const button = $('startCamera')
   button.textContent = 'Loading pose tracker…'
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      audio: false,
-    })
-    cam.srcObject = stream
+    cam.srcObject = await openCamera()
     await cam.play()
     // The mask lies like the mirrored pose, for the energy layer's silhouette.
-    tracker ??= await PoseTracker.create({ segmentation: !!energy, flipX: true })
+    // ?model=heavy (or lite) tries another pose model.
+    tracker ??= await PoseTracker.create({ segmentation: !!energy, flipX: true, model: modelFromParams(params) })
+    stopFrames ??= eachVideoFrame(cam, readCamera)
     begin('camera')
   } catch (e) {
     err.textContent = e instanceof Error ? e.message : String(e)
@@ -134,6 +136,8 @@ function begin(s: Source) {
   source = s
   user = null
   calm = null
+  smoother.reset()
+  hints.reset()
   follower.reset()
   sim.pos = 0
   cueUntil = -1
@@ -146,20 +150,24 @@ function begin(s: Source) {
   wake()
 }
 
+/** Once per new camera frame: find the learner, and steady them. */
+function readCamera(timeMs: number) {
+  if (source !== 'camera' || !tracker) return
+  const raw = tracker.detect(cam, timeMs)
+  energy?.setMask(tracker.mask)
+  const lm = smoother.update(raw, timeMs)
+  const aspect = cam.videoWidth / cam.videoHeight
+  if (!lm) {
+    user = null
+    return
+  }
+  const pose = poseFromLandmarks(lm, { aspect, flipX: true, facingAway: false })
+  user = { pose, feats: computeFeatures(pose, ref.posture), aspect }
+}
+
+/** The simulated student steps with the display; the camera is read as its frames come (`readCamera`). */
 function readLearner(dt: number) {
-  if (source === 'camera' && tracker && cam.readyState >= 2) {
-    if (cam.currentTime === lastCamTime) return
-    lastCamTime = cam.currentTime
-    const lm = tracker.detect(cam, performance.now())
-    energy?.setMask(tracker.mask)
-    const aspect = cam.videoWidth / cam.videoHeight
-    if (!lm) {
-      user = null
-      return
-    }
-    const pose = poseFromLandmarks(lm, { aspect, flipX: true, facingAway: false })
-    user = { pose, feats: computeFeatures(pose, ref.posture), aspect }
-  } else if (source === 'sim') {
+  if (source === 'sim') {
     const pose = sim.step(follower, dt)
     user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
   }
@@ -374,11 +382,8 @@ function say(text: string, invite = false) {
 
 function lineFor(now: number): string {
   const f = follower
-  if (source === 'none') return ''
-  if (!user)
-    return ref.posture === 'seated'
-      ? 'Sit back until your shoulders and waist are seen.'
-      : 'Step back until the whole of you is seen.'
+  // No one seen is the tracking hint's to say (`showHint`), up top.
+  if (source === 'none' || !user) return ''
   if (f.state === 'waiting') {
     if (f.startProgress > 0) return 'Rest here, and breathe.'
     return ref.posture === 'seated'
@@ -390,6 +395,24 @@ function lineFor(now: number): string {
   if (cueUntil < 0) cueUntil = now + CUE_SEC * 1000
   if (now < cueUntil) return posture === 'seated' && move.seatedCue ? move.seatedCue : move.cue
   return ''
+}
+
+const hints = new TrackingHints()
+let hintText = ''
+
+/**
+ * When the camera can't see the learner well, say so briefly, up top and apart
+ * from the move's line. Nothing while tracking is fine.
+ */
+function showHint(dt: number) {
+  const trouble =
+    source === 'camera' ? hints.update({ pose: user?.pose ?? null, aspect: aspectNow(), posture: ref.posture, dt }) : null
+  const text = trouble ? hints.text(ref.posture) : ''
+  if (text === hintText) return
+  hintText = text
+  const el = $('hint')
+  if (text) el.textContent = text
+  el.classList.toggle('shown', !!text)
 }
 
 function updateProgress() {
@@ -460,6 +483,7 @@ function frame(now: number) {
     busy: line !== '',
   })
   say(line || invite?.text || '', !line && !!invite)
+  showHint(dt)
   updateProgress()
   // At the end the chrome comes back to offer another round.
   if (follower.state === 'done') document.body.classList.remove('still')
