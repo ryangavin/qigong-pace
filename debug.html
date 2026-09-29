@@ -26,6 +26,10 @@
         <select id="move" aria-label="Move"></select>
         <label class="button quiet" for="videoFile">Learn from a video…</label>
         <input id="videoFile" type="file" accept="video/*" hidden />
+        <!-- A session is the tracked landmarks only, no images; R records too. A session file can also be dropped on the page. -->
+        <button id="record" class="button quiet" aria-pressed="false" aria-keyshortcuts="r" disabled>Record session</button>
+        <label class="button quiet" for="replayFile">Replay a session…</label>
+        <input id="replayFile" type="file" accept=".json,application/json" hidden />
       </div>
     </header>
 
@@ -82,6 +86,15 @@
         </label>
         <button id="simPause" class="button quiet">Pause student</button>
         <button id="useCamera" class="button quiet">Use camera instead</button>
+      </div>
+      <div id="replayControls" class="sim replay" hidden>
+        <span id="replayName" class="replay-name"></span>
+        <button id="replayPause" class="button quiet">Pause</button>
+        <label class="range">
+          <span>Replay <output id="replayTime"></output></span>
+          <input id="replayScrub" type="range" min="0" max="0" step="10" value="0" />
+        </label>
+        <button id="replayStop" class="button quiet">Stop replay</button>
       </div>
     </section>
 

@@ -31,6 +31,16 @@ through the webcam, matches its pose.
   reference implies (breath, reach, sink). The dynamics are grounded in `docs/sensations.md`, the
   research on what practitioners feel; keep the two in step.
 - `src/sim.ts`: the simulated student, for working without a webcam. `src/prefs.ts`: the remembered posture.
+- `src/session.ts`: recorded practice sessions (pure, tested): `Recorder` keeps the RAW MediaPipe landmarks of each
+  detection (all 33, x/y/z/visibility, before any filtering) with real timestamps, the camera aspect, move, posture,
+  follower settings and look-ahead, plus changes made while recording (move, posture, begin again, settings);
+  `Replayer` plays them back like a camera (advance its clock, read the newest detection). It sits at the input
+  boundary: both pages hand camera and replay landmarks to the same `takeLandmarks`, so everything after it
+  (filtering, calibration, following, qi) runs on a replay exactly as on the camera. `src/sessionFiles.ts`: download,
+  file picker, drop and `?replay=` loading.
+  The file is JSON: a readable header (`format: "qigong-pace-session"`, `version`, `move`, `posture`, `aspect`,
+  `settings`, `events`) and `frames`, one per line: `[ms, x, y, z, visibility × 33]` as integers (x, y × 10000,
+  z × 1000, visibility × 100), or `[ms]` when no one was found. Starting a recording begins the move again.
 - `index.html`, `src/primary/`: the primary view. The mirrored webcam full-bleed and graded dark. The guidance
   (`guidance.ts`) is something to trace: for each hand a bright path of where the teacher's wrist goes next (from
   `follower.pos`, aligned to the learner's body; warm for the screen-left hand, cool for the right), a bead where
@@ -47,7 +57,7 @@ through the webcam, matches its pose.
   unseen), only once it has lasted a moment; its hint sits up top (`#hint`), apart from the move's line.
   URL options: `?sim` (or `?sim=<speed>`) drives it with the simulated student over a synthetic dark room instead
   of the camera, and `?wander=<torso lengths>` (0.9 by default) sets how far its screen-right hand strays off the
-  path; `?palette=dusk|jade|ember`; `?qi=<0..1>` starts the session with that much qi and `?reps=<n>` starts each
+  path; `?replay=<url>` plays a recorded session in place of the camera (see below); `?palette=dusk|jade|ember`; `?qi=<0..1>` starts the session with that much qi and `?reps=<n>` starts each
   move as if already practised n times smoothly (dev aids for looking at higher qi and the grown energy without
   practising for minutes).
 - `debug.html`, `src/debug/`: the debug panel for developing the engine: teacher and learner side by side,
@@ -63,8 +73,10 @@ Run each once, after your last edit:
 - `npm run check` (`tsc --noEmit`): type-check. Run after any change to `src/`.
 - `npm test` (`vitest run`): unit tests in `src/**/*.test.ts`. Run after changing matching, following, moves,
   the qi model, the simulated student, the guidance overlay's helpers, the invitations, the tracking hints, the
-  landmark filter (`src/smoothing.ts`), the mask shrinking, or the energy layer's geometry and auto frame.
-  Filtering and the tracking hints on a live camera need a real person: check them on `debug.html`. Add tests for new behaviour there.
+  landmark filter (`src/smoothing.ts`), the mask shrinking, the energy layer's geometry and auto frame, or recorded
+  sessions (`src/session.ts`).
+  Filtering and the tracking hints on a live camera need a real person: check them on `debug.html`, or replay one
+  of the owner's recorded sessions (below). Add tests for new behaviour there.
 - The energy layer's look has no automated check: open `energy.html` in the dev server (`npx vite`) and look,
   and the primary view at `/?sim&qi=0.8` and `/?sim&qi=0.8&reps=4` (try each `palette`; the hand paths must stay
   legible over the energy). The GPU mask read-back needs a real person in
@@ -76,3 +88,20 @@ on every PR and on pushes to `main`; it is the final check.
 
 The app itself needs a webcam; without one, open the primary view at `/?sim` or use the debug panel's
 "simulated student" button.
+
+## Replaying the owner's sessions
+
+The owner records sessions at the webcam (Record, or R, in either page) and attaches the file to an issue. To debug
+one without a camera:
+
+- Save the attachment under `fixtures/replays/` (the dev server serves it; it is not part of the build), then open
+  `/debug.html?replay=fixtures/replays/<file>.json` to step through it: Pause, and scrub to the moment in the issue
+  (a scrub starts from the session's start and runs through at 30 ticks a second, so the follower and qi there are
+  what the session had come to). `/?replay=fixtures/replays/<file>.json` plays it in the primary view over the
+  synthetic dark room. Dropping the file on either page, or the debug panel's "Replay a session…", does the same.
+- `fixtures/replays/sim-sample.json` is the simulated student through "Holding up the sky", for trying it out.
+- For a test, read the file with `parseSession` and feed its decoded frames (`decodeFrame`, or a `Replayer`)
+  through a `LandmarkFilter` (timed by each frame's `t`) and `poseFromLandmarks(lm, { aspect, flipX: true,
+  facingAway: false })`, as the pages' `takeLandmarks` and `src/session.test.ts` do.
+- Replay runs at real speed; the follower's `dt` comes from the display's frames, as it does live, so a replay can
+  differ from the original by a frame's worth of easing. The session's qi starts fresh (and `?qi=`/`?reps=` apply).

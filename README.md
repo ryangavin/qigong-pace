@@ -57,6 +57,27 @@ stray further off its path.
 you side by side, a timeline, your pace, the matching sliders and loading a
 teacher from a video.
 
+## Send a session to the developers
+
+When something goes wrong in practice ("I couldn't reach one of the orbs"),
+record it so it can be replayed exactly:
+
+1. Choose the move, then click **Record** at the bottom left (or press **R**).
+   The move starts again from its opening shape; a small red dot shows while
+   recording.
+2. Practise until the problem has happened, then click **Stop recording** (or
+   press **R** again). A file named like
+   `qigong-session-lift-sky-2026-09-29-1830.json` downloads.
+3. [Open an issue](https://github.com/ryangavin/qigong-pace/issues/new), say
+   what happened and roughly when, and attach the file.
+
+The file holds only the tracked positions of your body's landmarks, their
+timings, the move, the posture and the matching settings: no video and no
+images. The debug panel records the same way (**Record session**).
+
+To watch a recording yourself, drop the file onto either page, or use
+**Replay a session…** in the debug panel, which can also pause and scrub it.
+
 ## Develop
 
 See [AGENTS.md](AGENTS.md) for the layout and the test commands

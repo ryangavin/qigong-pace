@@ -4,6 +4,16 @@ import { DEMO_MOVES, MOVE_SETS, referenceFromMove, type Move } from '../moves'
 import { eachVideoFrame, modelFromParams, openCamera, PoseTracker } from '../pose'
 import { loadPosture, savePosture } from '../prefs'
 import { QiModel } from '../qi'
+import {
+  landmarksFromPose,
+  Recorder,
+  Replayer,
+  type RawLandmark,
+  type Session,
+  type SessionChange,
+  type SessionSettings,
+} from '../session'
+import { clock, downloadSession, fetchSession, isShortcut, onSessionDrop } from '../sessionFiles'
 import { SimStudent } from '../sim'
 import { LandmarkFilter } from '../smoothing'
 import {
@@ -59,6 +69,8 @@ function selectMove(m: Move) {
   flow = startReps ? 1 : 0
   sim.pos = 0
   cueUntil = -1
+  $<HTMLSelectElement>('move').value = m.id
+  recorder?.event({ move: m.id }, performance.now())
 }
 
 function renderMoveList() {
@@ -80,9 +92,11 @@ function renderMoveList() {
   select.value = move.id
 }
 
-function setPosture(p: Posture) {
+/** `remember` keeps the choice for next time; a replay's posture isn't remembered. */
+function setPosture(p: Posture, remember = true) {
   posture = p
-  savePosture(p)
+  if (remember) savePosture(p)
+  recorder?.event({ posture: p }, performance.now())
   for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button')) {
     b.setAttribute('aria-pressed', String(b.dataset.posture === p))
   }
@@ -92,8 +106,13 @@ function setPosture(p: Posture) {
 
 // ---- Learner input -----------------------------------------------------------
 
-type Source = 'none' | 'camera' | 'sim'
+type Source = 'none' | 'camera' | 'sim' | 'replay'
 let source: Source = 'none'
+/** A recorded session played back in place of the camera (`?replay=<url>`, or a file dropped on the page). */
+let replay: Replayer | null = null
+let replayName = ''
+/** The session being recorded, if any. */
+let recorder: Recorder | null = null
 let tracker: PoseTracker | null = null
 const cam = $<HTMLVideoElement>('cam')
 /** Steadies the tracker's landmarks before they become the learner's pose. */
@@ -132,7 +151,15 @@ async function startCamera() {
   }
 }
 
+function stopCamera() {
+  for (const t of (cam.srcObject as MediaStream | null)?.getTracks() ?? []) t.stop()
+  cam.srcObject = null
+  stopFrames?.()
+  stopFrames = null
+}
+
 function begin(s: Source) {
+  if (recorder) stopRecording()
   source = s
   user = null
   calm = null
@@ -142,21 +169,50 @@ function begin(s: Source) {
   sim.pos = 0
   cueUntil = -1
   $('intro').hidden = true
-  $('backdrop').hidden = s !== 'sim'
+  $('backdrop').hidden = s !== 'sim' && s !== 'replay'
   cam.hidden = s !== 'camera'
-  $('useCamera').hidden = s !== 'sim'
+  $('useCamera').hidden = s !== 'sim' && s !== 'replay'
   $('again').hidden = false
+  $('record').hidden = s !== 'camera' && s !== 'sim'
   energy?.setMask(null)
   wake()
 }
 
-/** Once per new camera frame: find the learner, and steady them. */
+/** Once per new camera frame: find the learner. */
 function readCamera(timeMs: number) {
   if (source !== 'camera' || !tracker) return
   const raw = tracker.detect(cam, timeMs)
   energy?.setMask(tracker.mask)
+  takeLandmarks(raw, cam.videoWidth / cam.videoHeight, timeMs)
+}
+
+/**
+ * The simulated student and a replay step with the display; the camera is read
+ * as its frames come (`readCamera`).
+ */
+function readLearner(dt: number) {
+  if (source === 'replay' && replay) {
+    replay.advance(dt * 1000)
+    for (const change of replay.events()) applyChange(change)
+    const f = replay.read()
+    // Timed by the recording's own clock, so the filter sees the camera's real gaps.
+    if (f) takeLandmarks(f.landmarks, replay.session.aspect, f.t)
+    // At its end the recorded learner steps out of view.
+    else if (replay.ended) user = null
+  } else if (source === 'sim') {
+    const pose = sim.step(follower, dt)
+    recorder?.add(landmarksFromPose(pose, ref.aspect), performance.now())
+    user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
+  }
+}
+
+/**
+ * One detection's raw landmarks, from the camera or a replay: recorded as they
+ * are, then steadied and read as the learner.
+ */
+function takeLandmarks(raw: RawLandmark[] | null, aspect: number, timeMs: number) {
+  recorder?.add(raw, timeMs)
   const lm = smoother.update(raw, timeMs)
-  const aspect = cam.videoWidth / cam.videoHeight
   if (!lm) {
     user = null
     return
@@ -165,12 +221,85 @@ function readCamera(timeMs: number) {
   user = { pose, feats: computeFeatures(pose, ref.posture), aspect }
 }
 
-/** The simulated student steps with the display; the camera is read as its frames come (`readCamera`). */
-function readLearner(dt: number) {
-  if (source === 'sim') {
-    const pose = sim.step(follower, dt)
-    user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
+// ---- Recording and replay ----------------------------------------------------
+
+const settingsNow = (): SessionSettings => ({ follower: follower.opts, lead: LEAD_SEC })
+
+/** Start recording the session (R), or stop and download it. */
+function toggleRecording() {
+  if (recorder) return stopRecording()
+  if (source !== 'camera' && source !== 'sim') return
+  // A recording starts the move from its beginning, so a replay can start there too.
+  beginAgain()
+  const head = { app: 'primary' as const, move: move.id, posture, aspect: aspectNow(), settings: settingsNow() }
+  recorder = new Recorder(head, performance.now())
+  showRecording()
+}
+
+function stopRecording() {
+  if (!recorder) return
+  const s = recorder.finish()
+  recorder = null
+  if (s.frames.length) downloadSession(s)
+  showRecording()
+}
+
+function showRecording() {
+  const button = $('record')
+  const text = recorder ? `Stop recording · ${clock(recorder.elapsed(performance.now()))}` : 'Record'
+  if (button.textContent !== text) button.textContent = text
+  button.setAttribute('aria-pressed', String(!!recorder))
+  $('recordDot').hidden = !recorder
+  const note = $('replayNote')
+  const replayText = source === 'replay' && replay ? `Replaying ${replayName} · ${clock(replay.time)} of ${clock(replay.duration)}` : ''
+  if (note.textContent !== replayText && !noticeUntil) note.textContent = replayText
+}
+
+let noticeUntil = 0
+/** A short message by the recording control, e.g. why a session couldn't be replayed. */
+function notice(text: string) {
+  if (source === 'none') {
+    $('cameraError').textContent = text
+    $('cameraError').hidden = false
+    return
   }
+  $('replayNote').textContent = text
+  clearTimeout(noticeUntil)
+  noticeUntil = window.setTimeout(() => (noticeUntil = 0), 6000)
+  wake()
+}
+
+/** Play a recorded session in place of the camera, from its start and with its move, posture and settings. */
+function startReplay(s: Session, name: string) {
+  stopCamera()
+  replay = new Replayer(s)
+  replayName = name
+  begin('replay')
+  if (s.posture !== posture) setPosture(s.posture, false)
+  applyChange({ move: s.move })
+  follower.opts = { ...follower.opts, ...s.settings.follower }
+}
+
+/** A change the recorded learner made, played back. */
+function applyChange(c: SessionChange) {
+  if ('move' in c) {
+    const m = available().find((x) => x.id === c.move)
+    if (m) selectMove(m)
+    else notice(`This view has no move "${c.move}"; replaying with ${move.name}.`)
+  } else if ('posture' in c) {
+    if (c.posture !== posture) setPosture(c.posture, false)
+  } else if ('restart' in c) {
+    beginAgain()
+  } else {
+    follower.opts = { ...follower.opts, ...c.settings.follower }
+  }
+}
+
+function beginAgain() {
+  follower.reset()
+  sim.pos = 0
+  cueUntil = -1
+  recorder?.event({ restart: true }, performance.now())
 }
 
 // ---- Qi --------------------------------------------------------------------
@@ -259,11 +388,16 @@ function fitCanvas(c: HTMLCanvasElement) {
   return { w, h }
 }
 
-const aspectNow = () => (source === 'camera' ? cam.videoWidth / cam.videoHeight || 16 / 9 : ref.aspect)
+const aspectNow = () =>
+  source === 'camera'
+    ? cam.videoWidth / cam.videoHeight || 16 / 9
+    : source === 'replay' && replay
+      ? replay.session.aspect
+      : ref.aspect
 
 /**
  * Without a camera, a stand-in for one: a dim room with the simulated student
- * as a soft dark figure, graded like the camera would be.
+ * (or a replayed learner) as a soft dark figure, graded like the camera would be.
  */
 function drawBackdrop() {
   const c = $<HTMLCanvasElement>('backdrop')
@@ -275,7 +409,7 @@ function drawBackdrop() {
   ctx.fillStyle = g
   ctx.fillRect(0, 0, w, h)
   if (!calm) return
-  const view = coverView(w, h, ref.aspect)
+  const view = coverView(w, h, aspectNow())
   const T = bodyScale(calm, ref.posture) * view.s
   ctx.save()
   ctx.strokeStyle = ctx.fillStyle = '#4c545e'
@@ -405,8 +539,9 @@ let hintText = ''
  * from the move's line. Nothing while tracking is fine.
  */
 function showHint(dt: number) {
+  // A replay says what the camera would have said.
   const trouble =
-    source === 'camera' ? hints.update({ pose: user?.pose ?? null, aspect: aspectNow(), posture: ref.posture, dt }) : null
+    source === 'camera' || source === 'replay' ? hints.update({ pose: user?.pose ?? null, aspect: aspectNow(), posture: ref.posture, dt }) : null
   const text = trouble ? hints.text(ref.posture) : ''
   if (text === hintText) return
   hintText = text
@@ -449,12 +584,17 @@ for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button'))
   })
 }
 $('again').addEventListener('click', () => {
-  follower.reset()
-  sim.pos = 0
-  cueUntil = -1
+  // A replay begins again from the start of the recording.
+  if (source === 'replay' && replay) startReplay(replay.session, replayName)
+  else beginAgain()
 })
 $('startCamera').addEventListener('click', startCamera)
 $('useCamera').addEventListener('click', startCamera)
+$('record').addEventListener('click', toggleRecording)
+window.addEventListener('keydown', (e) => {
+  if (isShortcut(e, 'r')) toggleRecording()
+})
+onSessionDrop(startReplay, notice)
 
 // ---- Loop --------------------------------------------------------------------
 
@@ -467,7 +607,7 @@ function frame(now: number) {
   follower.update(user?.feats ?? null, dt)
   if (source !== 'none') qi.update({ follower, pose: user?.pose ?? null, dt })
   updateMix(dt)
-  if (source === 'sim') drawBackdrop()
+  if (source === 'sim' || source === 'replay') drawBackdrop()
   if (source !== 'none') drawEnergy(dt)
   drawGuidance(dt, now / 1000)
   // The move's own words come first; an invitation only ever fills a quiet line.
@@ -485,6 +625,7 @@ function frame(now: number) {
   say(line || invite?.text || '', !line && !!invite)
   showHint(dt)
   updateProgress()
+  showRecording()
   // At the end the chrome comes back to offer another round.
   if (follower.state === 'done') document.body.classList.remove('still')
   requestAnimationFrame(frame)
@@ -492,4 +633,10 @@ function frame(now: number) {
 
 setPosture(posture)
 if (simParam !== null) begin('sim')
+// ?replay=fixtures/replays/session.json plays a recorded session the dev server serves in place of the camera.
+const replayParam = params.get('replay')
+if (replayParam)
+  fetchSession(replayParam)
+    .then((s) => startReplay(s, replayParam.split('/').pop() ?? replayParam))
+    .catch((e) => notice(e instanceof Error ? e.message : String(e)))
 requestAnimationFrame(frame)

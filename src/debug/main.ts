@@ -4,6 +4,16 @@ import { DEMO_MOVES, MOVE_SETS, referenceFromMove } from '../moves'
 import { eachVideoFrame, modelFromParams, openCamera, PoseTracker } from '../pose'
 import { loadPosture, savePosture } from '../prefs'
 import { QI_REGIONS, QiModel } from '../qi'
+import {
+  landmarksFromPose,
+  Recorder,
+  Replayer,
+  type RawLandmark,
+  type Session,
+  type SessionChange,
+  type SessionSettings,
+} from '../session'
+import { clock, downloadSession, fetchSession, isShortcut, onSessionDrop, readSessionFile } from '../sessionFiles'
 import { SimStudent } from '../sim'
 import { LandmarkFilter, RateMeter } from '../smoothing'
 import {
@@ -88,7 +98,9 @@ function selectEntry(e: Entry) {
   $('cue').textContent = posture === 'seated' && e.seatedCue ? e.seatedCue : e.cue
   $('lost').textContent = e.lost ? `Not shown from the front: ${e.lost}.` : ''
   $('facingWrap').hidden = !e.video
+  $<HTMLSelectElement>('move').value = e.id
   sim.pos = 0
+  recorder?.event({ move: e.id }, performance.now())
 }
 
 function renderMoveList() {
@@ -110,9 +122,11 @@ function renderMoveList() {
   select.value = entry.id
 }
 
-function setPosture(p: Posture) {
+/** `remember` keeps the choice for next time; a replay's posture isn't remembered. */
+function setPosture(p: Posture, remember = true) {
   posture = p
-  savePosture(p)
+  if (remember) savePosture(p)
+  recorder?.event({ posture: p }, performance.now())
   for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button')) {
     b.setAttribute('aria-pressed', String(b.dataset.posture === p))
   }
@@ -127,8 +141,13 @@ function setPosture(p: Posture) {
 
 // ---- Learner input -----------------------------------------------------------
 
-type Source = 'none' | 'camera' | 'sim'
+type Source = 'none' | 'camera' | 'sim' | 'replay'
 let source: Source = 'none'
+/** A recorded session played back in place of the camera: from the file picker, or a file dropped on the page. */
+let replay: Replayer | null = null
+let replayPaused = false
+/** The session being recorded, if any. */
+let recorder: Recorder | null = null
 let camTracker: PoseTracker | null = null
 const cam = document.createElement('video')
 cam.muted = true
@@ -153,10 +172,7 @@ async function startCamera() {
     await cam.play()
     camTracker ??= await PoseTracker.create({ model })
     stopFrames ??= eachVideoFrame(cam, readCamera)
-    smoother.reset()
-    source = 'camera'
-    $('youEmpty').hidden = true
-    $('simControls').hidden = true
+    setSource('camera')
   } catch (e) {
     err.textContent = e instanceof Error ? e.message : String(e)
     err.hidden = false
@@ -166,35 +182,181 @@ async function startCamera() {
 }
 
 function startSim() {
-  source = 'sim'
+  setSource('sim')
   sim.pos = 0
-  $('youEmpty').hidden = true
-  $('simControls').hidden = false
   follower.reset()
 }
 
-/** Once per new camera frame, as the primary view does it: find the learner, and steady them. */
+/** Switch the learner's input, and the controls that go with it. */
+function setSource(s: Source) {
+  if (recorder && s !== source) stopRecording()
+  if (s !== 'camera') {
+    for (const t of (cam.srcObject as MediaStream | null)?.getTracks() ?? []) t.stop()
+    cam.srcObject = null
+    stopFrames?.()
+    stopFrames = null
+  }
+  source = s
+  user = null
+  rawPose = null
+  smoother.reset()
+  $('youEmpty').hidden = s !== 'none'
+  $('simControls').hidden = s !== 'sim'
+  $('replayControls').hidden = s !== 'replay'
+  $<HTMLButtonElement>('record').disabled = s !== 'camera' && s !== 'sim'
+}
+
+/** Once per new camera frame, as the primary view does it: find the learner. */
 function readCamera(timeMs: number) {
   if (source !== 'camera' || !camTracker) return
   detections.tick(timeMs)
-  const raw = camTracker.detect(cam, timeMs)
+  takeLandmarks(camTracker.detect(cam, timeMs), cam.videoWidth / cam.videoHeight, timeMs)
+}
+
+/** The simulated student and a replay step with the display; the camera is read as its frames come (`readCamera`). */
+function readLearner(dt: number) {
+  if (source === 'replay' && replay) {
+    replay.advance(dt * 1000)
+    for (const change of replay.events()) applyChange(change)
+    const f = replay.read()
+    // Timed by the recording's own clock, so the filter sees the camera's real gaps.
+    if (f) takeLandmarks(f.landmarks, replay.session.aspect, f.t)
+    // At its end the recorded learner steps out of view.
+    else if (replay.ended) {
+      user = null
+      rawPose = null
+    }
+  } else if (source === 'sim') {
+    const pose = sim.step(follower, dt)
+    recorder?.add(landmarksFromPose(pose, ref.aspect), performance.now())
+    user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
+  }
+}
+
+/**
+ * One detection's raw landmarks, from the camera or a replay: recorded as they
+ * are, then steadied and read as the learner.
+ */
+function takeLandmarks(raw: RawLandmark[] | null, aspect: number, timeMs: number) {
+  recorder?.add(raw, timeMs)
   const lm = smoother.update(raw, timeMs)
-  const opts = { aspect: cam.videoWidth / cam.videoHeight, flipX: true, facingAway: false }
+  const opts = { aspect, flipX: true, facingAway: false }
   rawPose = raw ? poseFromLandmarks(raw, opts) : null
   if (!lm) {
     user = null
     return
   }
   const pose = poseFromLandmarks(lm, opts)
-  user = { pose, feats: computeFeatures(pose, ref.posture), aspect: opts.aspect }
+  user = { pose, feats: computeFeatures(pose, ref.posture), aspect }
 }
 
-function readLearner(dt: number) {
-  if (source === 'sim') {
-    const pose = sim.step(follower, dt)
-    user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
-  }
+/** One tick of practice: read the learner, then follow them and gather qi. */
+function advance(dt: number) {
+  readLearner(dt)
+  follower.update(user?.feats ?? null, dt)
+  if (source !== 'none') qi.update({ follower, pose: user?.pose ?? null, dt })
 }
+
+// ---- Recording and replay ----------------------------------------------------
+
+const settingsNow = (): SessionSettings => ({ follower: follower.opts, lead: Number($<HTMLInputElement>('lead').value) })
+
+/** Start recording the session (R), or stop and download it. */
+function toggleRecording() {
+  if (recorder) return stopRecording()
+  if (source !== 'camera' && source !== 'sim') return
+  // A recording starts the move from its beginning, so a replay can start there too.
+  restart()
+  const aspect = source === 'camera' ? cam.videoWidth / cam.videoHeight : ref.aspect
+  recorder = new Recorder({ app: 'debug', move: entry.id, posture, aspect, settings: settingsNow() }, performance.now())
+}
+
+function stopRecording() {
+  if (!recorder) return
+  const s = recorder.finish()
+  recorder = null
+  if (s.frames.length) downloadSession(s)
+}
+
+function showSession() {
+  const button = $('record')
+  const text = recorder ? `Stop recording · ${clock(recorder.elapsed(performance.now()))}` : 'Record session'
+  if (button.textContent !== text) button.textContent = text
+  button.setAttribute('aria-pressed', String(!!recorder))
+  if (source !== 'replay' || !replay) return
+  const scrub = $<HTMLInputElement>('replayScrub')
+  scrub.max = String(replay.duration)
+  // Left alone while it is being dragged.
+  if (!scrub.matches(':active')) scrub.value = String(replay.time)
+  const time = `${clock(replay.time)} of ${clock(replay.duration)}`
+  if ($('replayTime').textContent !== time) $('replayTime').textContent = time
+  const pause = replayPaused ? 'Play' : replay.ended ? 'Replay again' : 'Pause'
+  if ($('replayPause').textContent !== pause) $('replayPause').textContent = pause
+}
+
+/** Play a recorded session in place of the camera, from its start. */
+function startReplay(s: Session, name: string) {
+  replay = new Replayer(s)
+  $('replayName').textContent = name
+  replayPaused = false
+  setSource('replay')
+  seekReplay(0)
+}
+
+/**
+ * Put the replay at `ms`: back to the session's start (its move, posture and
+ * settings, a fresh follower and qi), then run through to `ms` at 30 ticks a
+ * second, so what shows there is what the session had come to.
+ */
+function seekReplay(ms: number) {
+  if (!replay) return
+  const s = replay.session
+  if (s.posture !== posture) setPosture(s.posture, false)
+  applyChange({ move: s.move })
+  applySettings(s.settings)
+  follower.reset()
+  follower.reps = 0
+  qi.reset()
+  sim.pos = 0
+  user = null
+  rawPose = null
+  smoother.reset()
+  replay.seek(0)
+  const tick = 1000 / 30
+  for (let t = 0; t < ms; t += tick) advance(Math.min(tick, ms - t) / 1000)
+}
+
+/** A change the recorded learner made, played back. */
+function applyChange(c: SessionChange) {
+  if ('move' in c) {
+    const e = available().find((x) => x.id === c.move)
+    if (e) {
+      if (e !== entry) selectEntry(e)
+    } else setStatus(`No move "${c.move}" here (a video?); replaying with ${entry.name}.`)
+  } else if ('posture' in c) {
+    if (c.posture !== posture) setPosture(c.posture, false)
+  } else if ('restart' in c) {
+    restart()
+  } else applySettings(c.settings)
+}
+
+/** Put the sliders and follower where a recording had them. */
+function applySettings(s: SessionSettings) {
+  follower.opts = { ...follower.opts, ...s.follower }
+  $<HTMLInputElement>('lead').value = String(s.lead)
+  $<HTMLInputElement>('thresh').value = String(follower.opts.matchThreshold)
+  $<HTMLInputElement>('loop').checked = follower.opts.loop
+  $('leadOut').textContent = `${s.lead.toFixed(2)}s`
+  $('threshOut').textContent = follower.opts.matchThreshold.toFixed(2)
+}
+
+function restart() {
+  follower.reset()
+  sim.pos = 0
+  recorder?.event({ restart: true }, performance.now())
+}
+
+const settingsChanged = () => recorder?.event({ settings: settingsNow() }, performance.now())
 
 // ---- Drawing -------------------------------------------------------------
 
@@ -322,7 +484,12 @@ function drawYou() {
   ctx.fillStyle = PAPER_DEEP
   ctx.fillRect(0, 0, w, h)
   if (source === 'none') return
-  const aspect = source === 'camera' ? cam.videoWidth / cam.videoHeight || 4 / 3 : ref.aspect
+  const aspect =
+    source === 'camera'
+      ? cam.videoWidth / cam.videoHeight || 4 / 3
+      : source === 'replay' && replay
+        ? replay.session.aspect
+        : ref.aspect
   const view = containView(w, h, aspect)
   if (source === 'camera') {
     ctx.save()
@@ -333,7 +500,7 @@ function drawYou() {
     ctx.fillStyle = 'rgba(243, 238, 227, 0.25)'
     ctx.fillRect(view.ox, view.oy, view.w, view.h)
   }
-  if (source === 'camera' && rawPose) {
+  if ((source === 'camera' || source === 'replay') && rawPose) {
     // The tracker's own landmarks, faint, under the filtered skeleton.
     ctx.fillStyle = INK
     for (const j of JOINTS) {
@@ -470,10 +637,10 @@ let lastT = performance.now()
 function frame(now: number) {
   const dt = Math.min(0.1, (now - lastT) / 1000)
   lastT = now
-  readLearner(dt)
-  follower.update(user?.feats ?? null, dt)
-  if (source !== 'none') qi.update({ follower, pose: user?.pose ?? null, dt })
+  // A paused replay holds everything still, the teacher too.
+  if (!(source === 'replay' && replayPaused)) advance(dt)
   updateQiReadout()
+  showSession()
   const lead = Number($<HTMLInputElement>('lead').value)
   drawTeacher(lead)
   drawYou()
@@ -496,8 +663,11 @@ function bindRange(id: string, fmt: (v: number) => string, apply: (v: number) =>
   sync()
 }
 
-bindRange('lead', (v) => `${v.toFixed(2)}s`, () => {})
-bindRange('thresh', (v) => v.toFixed(2), (v) => (follower.opts.matchThreshold = v))
+bindRange('lead', (v) => `${v.toFixed(2)}s`, settingsChanged)
+bindRange('thresh', (v) => v.toFixed(2), (v) => {
+  follower.opts.matchThreshold = v
+  settingsChanged()
+})
 bindRange('simSpeed', (v) => `${v.toFixed(2)}×`, (v) => (sim.speed = v))
 
 $('move').addEventListener('change', (e) => {
@@ -505,22 +675,43 @@ $('move').addEventListener('change', (e) => {
   selectEntry(entries.find((x) => x.id === id)!)
 })
 $('restart').addEventListener('click', () => {
-  follower.reset()
-  sim.pos = 0
+  if (source === 'replay') seekReplay(0)
+  else restart()
 })
 $<HTMLInputElement>('loop').addEventListener('change', (e) => {
   follower.opts.loop = (e.target as HTMLInputElement).checked
+  settingsChanged()
+})
+
+$('record').addEventListener('click', toggleRecording)
+window.addEventListener('keydown', (e) => {
+  if (isShortcut(e, 'r')) toggleRecording()
+})
+$<HTMLInputElement>('replayFile').addEventListener('change', async (e) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    startReplay(await readSessionFile(file), file.name)
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err))
+  }
+})
+onSessionDrop(startReplay, setStatus)
+$('replayPause').addEventListener('click', () => {
+  if (replay?.ended && !replayPaused) seekReplay(0)
+  else replayPaused = !replayPaused
+})
+$<HTMLInputElement>('replayScrub').addEventListener('input', (e) => seekReplay(Number((e.target as HTMLInputElement).value)))
+$('replayStop').addEventListener('click', () => {
+  replay = null
+  setSource('none')
 })
 $('facingAway').addEventListener('change', () => selectEntry(entry))
 $('startCamera').addEventListener('click', startCamera)
 $('startSim').addEventListener('click', startSim)
-$('useCamera').addEventListener('click', () => {
-  $('youEmpty').hidden = false
-  $('simControls').hidden = true
-  source = 'none'
-  user = null
-  rawPose = null
-})
+$('useCamera').addEventListener('click', () => setSource('none'))
 $('simPause').addEventListener('click', (e) => {
   sim.paused = !sim.paused
   ;(e.target as HTMLButtonElement).textContent = sim.paused ? 'Resume student' : 'Pause student'
@@ -572,4 +763,10 @@ for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button'))
 }
 
 setPosture(posture)
+// ?replay=fixtures/replays/session.json plays a recorded session the dev server serves in place of the camera.
+const replayParam = new URLSearchParams(location.search).get('replay')
+if (replayParam)
+  fetchSession(replayParam)
+    .then((s) => startReplay(s, replayParam.split('/').pop() ?? replayParam))
+    .catch((e) => setStatus(e instanceof Error ? e.message : String(e)))
 requestAnimationFrame(frame)
