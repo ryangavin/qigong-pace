@@ -1,5 +1,6 @@
 import { createEnergyLayer, PALETTE_NAMES, type EnergyLayer, type PaletteName } from '../energy'
-import { Follower, type Reference } from '../follower'
+import { BodyFit, fitOnto, TYPICAL_BODY, type Proportions } from '../fit'
+import { Follower, fitReference, type Reference } from '../follower'
 import { DEMO_MOVES, MOVE_SETS, referenceFromMove, type Move } from '../moves'
 import { eachVideoFrame, modelFromParams, openCamera, PoseTracker } from '../pose'
 import { loadPosture, savePosture } from '../prefs'
@@ -17,7 +18,6 @@ import { clock, downloadSession, fetchSession, isShortcut, onSessionDrop } from 
 import { SimStudent } from '../sim'
 import { LandmarkFilter } from '../smoothing'
 import {
-  alignment,
   bodyScale,
   computeFeatures,
   coverView,
@@ -29,9 +29,18 @@ import {
   type Features,
   type Pose,
   type Posture,
-  type Pt,
 } from '../skeleton'
-import { beadFrame, Guidance, guidanceMix, handPath, holdAt, holdProgress, matchOf, wristsAt } from './guidance'
+import {
+  beadFrame,
+  Guidance,
+  guidanceMix,
+  handPath,
+  holdAt,
+  holdProgress,
+  matchOf,
+  outOfView,
+  palmsAt,
+} from './guidance'
 import { Invitations } from './invitations'
 import { TrackingHints } from './tracking'
 
@@ -52,7 +61,11 @@ const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
 let posture = loadPosture()
 const available = () => DEMO_MOVES.filter((m) => m.postures.includes(posture))
 let move: Move = available()[0] ?? DEMO_MOVES[0]
-let ref: Reference = referenceFromMove(move, posture)
+/** The learner's own body, measured as they practise; the teacher is fitted to it. */
+let fit = new BodyFit(posture)
+/** The teacher's move as drawn, and `ref`, the same move fitted to the learner's body. */
+let teacherRef: Reference = referenceFromMove(move, posture)
+let ref: Reference = fitReference(teacherRef, fit.body)
 // ?reps=2 starts each move as if already practised that many times, smoothly:
 // a dev aid for looking at the view once the energy has grown.
 const startReps = Math.max(0, Math.floor(Number(params.get('reps')) || 0))
@@ -63,7 +76,9 @@ let flow = startReps ? 1 : 0
 
 function selectMove(m: Move) {
   move = m
-  ref = referenceFromMove(m, posture)
+  if (fit.posture !== posture) fit = new BodyFit(posture)
+  teacherRef = referenceFromMove(m, posture)
+  ref = fitReference(teacherRef, fit.body)
   follower = new Follower(ref, follower.opts)
   follower.reps = startReps
   flow = startReps ? 1 : 0
@@ -127,7 +142,31 @@ let calm: Pose | null = null
 // default, 0 keeps it on the path), to see the hand ring off its path.
 const simParam = params.get('sim')
 const wanderParam = Number(params.get('wander'))
-const sim = new SimStudent({ speed: Number(simParam) || 0.5, wander: params.has('wander') && wanderParam >= 0 ? wanderParam : 0.9 })
+const sim = new SimStudent({
+  speed: Number(simParam) || 0.5,
+  wander: params.has('wander') && wanderParam >= 0 ? wanderParam : 0.9,
+  body: simBody(),
+})
+
+/**
+ * The simulated student is built like a typical person, not like the teacher.
+ * ?arms=1.3 sets its arms' length (shoulder to wrist) and ?shoulders=0.7 its
+ * shoulder width, both in torso lengths (typically 1.15 and 0.8), to see the
+ * teacher fitted to other bodies.
+ */
+function simBody(): Proportions {
+  const body = { ...TYPICAL_BODY }
+  const arms = Number(params.get('arms'))
+  if (arms > 0) {
+    const k = arms / (body.upperArm + body.forearm)
+    body.upperArm *= k
+    body.forearm *= k
+    body.hand *= k
+  }
+  const shoulders = Number(params.get('shoulders'))
+  if (shoulders > 0) body.shoulders = shoulders
+  return body
+}
 
 async function startCamera() {
   const err = $('cameraError')
@@ -165,6 +204,9 @@ function begin(s: Source) {
   calm = null
   smoother.reset()
   hints.reset()
+  // Someone new, perhaps: measure them afresh.
+  fit = new BodyFit(posture)
+  refit()
   follower.reset()
   sim.pos = 0
   cueUntil = -1
@@ -204,6 +246,13 @@ function readLearner(dt: number) {
     recorder?.add(landmarksFromPose(pose, ref.aspect), performance.now())
     user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
   }
+  if (user && fit.update(user.pose, follower.state === 'following', dt)) refit()
+}
+
+/** Fit the teacher's move to the learner's body as now measured; the follower keeps its place. */
+function refit() {
+  ref = fitReference(teacherRef, fit.body)
+  follower.ref = ref
 }
 
 /**
@@ -440,7 +489,9 @@ function drawBackdrop() {
 const guidance = new Guidance(() => reducedMotion.matches)
 let presence = 0
 /** How the teacher was last laid on the learner; it stays while no one is seen, and fades. */
-let place: ((p: Pt) => Pt) | null = null
+let place: ((p: Pose) => Pose) | null = null
+/** How long (seconds) the beads or paths have lain outside the picture, eased: past a moment, the learner is asked to step back. */
+let outside = 0
 
 function drawGuidance(dt: number, time: number) {
   const c = $<HTMLCanvasElement>('guidance')
@@ -453,7 +504,8 @@ function drawGuidance(dt: number, time: number) {
   const hold = moving ? holdAt(ref, pos, follower.opts.holdMotion) : null
   const bead = waiting ? 0 : beadFrame(ref, pos, LEAD_SEC, hold)
   const teacher = ref.poses[Math.round(bead)]
-  if (calm) place = alignment(teacher, calm, ref.posture)
+  // The teacher, fitted to the learner's proportions, laid on them from their own shoulders.
+  if (calm) place = fitOnto(teacher, calm, ref.posture)
   const target = follower.state === 'done' ? 0.45 : calm ? 1 : 0
   presence += (target - presence) * (1 - Math.exp(-dt / 0.8))
   if (!place) {
@@ -461,21 +513,27 @@ function drawGuidance(dt: number, time: number) {
     return
   }
   const none = { l: [], r: [] }
-  const shape = {} as Pose
-  for (const j of JOINTS) shape[j] = place(teacher[j])
+  const shape = place(teacher)
   const due = (bead - pos) / ref.fps
   // The traced stretch reaches a little way back of where the follower puts
   // the learner too, so a hand a moment behind still counts as on its way.
   const from = Math.max(0, pos - LEAD_SEC * ref.fps)
+  const view = coverView(w, h, aspectNow())
+  const dpr = window.devicePixelRatio || 1
+  const ahead = moving ? handPath(ref, bead, Math.max(0, mix.pathSeconds - due), place) : none
+  const beads = palmsAt(ref, bead, place)
+  // A light the picture can't show can't be reached: ask the learner to step back rather than chase it.
+  const out = calm && outOfView([beads.l, beads.r, ...ahead.l, ...ahead.r], view, w, h, 12 * dpr)
+  outside = out ? Math.min(3, outside + dt) : Math.max(0, outside - dt)
   guidance.draw(ctx, {
-    view: coverView(w, h, aspectNow()),
-    dpr: window.devicePixelRatio || 1,
+    view,
+    dpr,
     shape,
     learner: calm,
     posture: ref.posture,
     behind: moving ? handPath(ref, from, (bead - from) / ref.fps, place) : none,
-    ahead: moving ? handPath(ref, bead, Math.max(0, mix.pathSeconds - due), place) : none,
-    bead: wristsAt(ref, bead, place),
+    ahead,
+    bead: beads,
     hold: waiting ? follower.startProgress : hold ? holdProgress(hold, pos) : null,
     waiting,
     presence,
@@ -536,13 +594,22 @@ let hintText = ''
 
 /**
  * When the camera can't see the learner well, say so briefly, up top and apart
- * from the move's line. Nothing while tracking is fine.
+ * from the move's line. Nothing while tracking is fine. Where a light would
+ * fall outside the picture, stepping back brings it in: that is said here too,
+ * rather than showing a light that can't be reached.
  */
 function showHint(dt: number) {
   // A replay says what the camera would have said.
   const trouble =
     source === 'camera' || source === 'replay' ? hints.update({ pose: user?.pose ?? null, aspect: aspectNow(), posture: ref.posture, dt }) : null
-  const text = trouble ? hints.text(ref.posture) : ''
+  const offPicture = !!user && outside > 0.6 && follower.state !== 'done'
+  const text = trouble
+    ? hints.text(ref.posture)
+    : offPicture
+      ? ref.posture === 'seated'
+        ? 'Sit back a little, so your hands stay in the light.'
+        : 'Step back a little, so your hands stay in the light.'
+      : ''
   if (text === hintText) return
   hintText = text
   const el = $('hint')

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { fitOnto } from '../fit'
 import { Follower, type Reference } from '../follower'
 import { DEMO_MOVES, referenceFromMove } from '../moves'
 import { SimStudent } from '../sim'
@@ -21,7 +22,8 @@ import {
   lockOn,
   matchOf,
   nearness,
-  wristsAt,
+  outOfView,
+  palmsAt,
 } from './guidance'
 
 const ref = referenceFromMove(DEMO_MOVES[0])
@@ -47,44 +49,44 @@ describe('matchOf', () => {
 describe('handPath', () => {
   const same = <T>(p: T) => p
 
-  it('follows the wrists over the next stretch of the move', () => {
+  it('follows the palms over the next stretch of the move', () => {
     const from = 30
     const path = handPath(ref, from, 1.5, same)
     // 1.5 s at 20 samples a second, plus the starting point.
     expect(path.l).toHaveLength(31)
     expect(path.r).toHaveLength(31)
-    expect(path.l[0]).toEqual(ref.poses[from].lWrist)
-    expect(path.r.at(-1)).toEqual(ref.poses[from + 45].rWrist)
+    expect(path.l[0]).toEqual(ref.poses[from].lPalm)
+    expect(path.r.at(-1)).toEqual(ref.poses[from + 45].rPalm)
   })
 
   it('stops at the end of the move', () => {
     const n = ref.poses.length
     const path = handPath(ref, n - 10, 1.5, same)
-    expect(path.l.at(-1)).toEqual(ref.poses[n - 1].lWrist)
+    expect(path.l.at(-1)).toEqual(ref.poses[n - 1].lPalm)
     expect(path.l.length).toBeLessThan(10)
   })
 
   it('carries the path onto the learner the same way the teacher is', () => {
     const teacher = ref.poses[60]
     const learner = alignPoseTo(ref.poses[0], { ...ref.poses[0], lHip: { x: 0.2, y: 0.5, v: 1 } })
-    const place = alignment(teacher, learner)
-    const shape = alignPoseTo(teacher, learner)
+    const place = fitOnto(teacher, learner, 'standing')
+    const shape = place(teacher)
     const path = handPath(ref, 60, 1, place)
-    expect(path.l[0].x).toBeCloseTo(shape.lWrist.x)
-    expect(path.l[0].y).toBeCloseTo(shape.lWrist.y)
+    expect(path.l[0].x).toBeCloseTo(shape.lPalm.x)
+    expect(path.l[0].y).toBeCloseTo(shape.lPalm.y)
   })
 
   it('starts between frames where the learner is between them', () => {
     const path = handPath(ref, 30.5, 1, same)
-    const a = ref.poses[30].rWrist
-    const b = ref.poses[31].rWrist
+    const a = ref.poses[30].rPalm
+    const b = ref.poses[31].rPalm
     expect(path.r[0].x).toBeCloseTo((a.x + b.x) / 2)
     expect(path.r[0].y).toBeCloseTo((a.y + b.y) / 2)
   })
 
   it('ends exactly where the stretch ends, between samples too', () => {
     const path = handPath(ref, 30, 1.05, same)
-    const end = wristsAt(ref, 30 + 1.05 * ref.fps, same)
+    const end = palmsAt(ref, 30 + 1.05 * ref.fps, same)
     expect(path.l.at(-1)!.x).toBeCloseTo(end.l.x)
     expect(path.l.at(-1)!.y).toBeCloseTo(end.l.y)
   })
@@ -94,11 +96,11 @@ describe('handPath', () => {
     let wide = 0
     ref.poses.forEach((p, i) => {
       const q = ref.poses[wide]
-      if (p.rWrist.x - p.lWrist.x > q.rWrist.x - q.lWrist.x) wide = i
+      if (p.rPalm.x - p.lPalm.x > q.rPalm.x - q.lPalm.x) wide = i
     })
     const learner = { ...ref.poses[0] }
     for (const j of JOINTS) learner[j] = { x: ref.poses[0][j].x * 0.6 + 0.9, y: ref.poses[0][j].y * 0.6 + 0.3, v: 1 }
-    const place = alignment(ref.poses[wide], learner)
+    const place = fitOnto(ref.poses[wide], learner, 'standing')
     const path = handPath(ref, wide, 0, place)
     const mid = (learner.lHip.x + learner.rHip.x) / 2
     expect(path.l[0].x).toBeLessThan(mid)
@@ -180,13 +182,13 @@ describe('lock-on', () => {
       const pose = sim.step(f, 1 / 30)
       f.update(computeFeatures(pose), 1 / 30)
       if (f.state !== 'following') continue
-      const place = alignment(ref.poses[Math.round(f.pos)], pose)
+      const place = fitOnto(ref.poses[Math.round(f.pos)], pose, 'standing')
       const hold = holdAt(ref, f.pos, f.opts.holdMotion)
       const bead = beadFrame(ref, f.pos, 0.5, hold)
       const behind = handPath(ref, f.pos, (bead - f.pos) / ref.fps, place)
-      const at = wristsAt(ref, bead, place)
+      const at = palmsAt(ref, bead, place)
       for (const side of ['l', 'r'] as const) {
-        const near = nearness(pose[side === 'l' ? 'lWrist' : 'rWrist'], [...behind[side], at[side]], torsoLength(pose))
+        const near = nearness(pose[side === 'l' ? 'lPalm' : 'rPalm'], [...behind[side], at[side]], torsoLength(pose))
         locked[side] = lockOn(locked[side], near)
         ever[side]++
         if (!locked[side]) off[side]++
@@ -243,6 +245,23 @@ describe('alignment', () => {
       const move = alignment(p, target, posture)
       for (const j of JOINTS) expect(move(p[j])).toEqual(aligned[j])
     }
+  })
+})
+
+describe('outOfView', () => {
+  // A 4:3 picture filling a wide 1600×900 box: its top and bottom 150 px are cropped away.
+  const view = coverView(1600, 900, 4 / 3)
+  const at = (x: number, y: number) => ({ x, y, v: 1 })
+
+  it('is false while every point shows, clear of the edge', () => {
+    expect(outOfView([at(0.2, 0.2), at(1.2, 0.8)], view, 1600, 900, 10)).toBe(false)
+  })
+
+  it('sees a point in the cropped band, or beyond the picture, or at its very edge', () => {
+    expect(outOfView([at(0.6, 0.1)], view, 1600, 900, 10)).toBe(true)
+    expect(outOfView([at(-0.1, 0.5)], view, 1600, 900, 10)).toBe(true)
+    expect(outOfView([at(1.33, 0.5)], view, 1600, 900, 10)).toBe(true)
+    expect(outOfView([at(0.6, 0.13)], view, 1600, 900, 10)).toBe(true)
   })
 })
 

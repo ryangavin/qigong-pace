@@ -8,7 +8,16 @@ through the webcam, matches its pose.
 
 - `src/skeleton.ts`: poses, segments, features (body shape) and drawing helpers.
   `Posture` ('standing' | 'seated') decides which segments count and how the body is scaled.
+  Each pose carries a palm centre per hand (`lPalm`, `rPalm`; `palmCentre` reads it from MediaPipe's wrist,
+  index and pinky points, falling back along the forearm). The hands are drawn but not matched (weight 0).
+- `src/fit.ts`: fitting the teacher to the learner's own body. `Calibration` / `BodyFit` measure the learner's
+  segment lengths (`Proportions`, in body lengths) over the opening-pose wait and the first seconds of practice;
+  `retarget` redraws a pose on other proportions (the teacher's directions and foreshortening, the new lengths);
+  `fitOnto` lays a fitted teacher on the learner from their own shoulders, so every palm target is within reach.
 - `src/follower.ts`: `Reference` (a teacher's move) and `Follower`, which keeps the teacher in step with the learner.
+  A reference keeps the teacher's own poses (`teacher`, `teacherBody`); `fitReference` gives the same move fitted
+  to a learner's body (`poses`, `feats`), which is what the learner is compared with and guided by. The views
+  refit it as the learner's `BodyFit` moves on and swap it into the running `Follower`.
 - `src/moves.ts`: built-in moves as keyframes, and the figure drawn from them. Each `Move` lists the `postures` it supports.
   Keys are transcribed exactly from `docs/move-catalog.md` (the spec), one line per move.
 - `src/energy/`: the qi energy layer, a raw WebGL2 renderer drawn over the camera with `mix-blend-mode: screen`.
@@ -42,11 +51,13 @@ through the webcam, matches its pose.
   `settings`, `events`) and `frames`, one per line: `[ms, x, y, z, visibility × 33]` as integers (x, y × 10000,
   z × 1000, visibility × 100), or `[ms]` when no one was found. Starting a recording begins the move again.
 - `index.html`, `src/primary/`: the primary view. The mirrored webcam full-bleed and graded dark. The guidance
-  (`guidance.ts`) is something to trace: for each hand a bright path of where the teacher's wrist goes next (from
-  `follower.pos`, aligned to the learner's body; warm for the screen-left hand, cool for the right), a bead where
-  the hand should be now (the follower's lead; it stays put and fills a ring through a hold), and a ring on the
-  learner's own hand that locks on to its bead, tethered back to it when off. The teacher's shape is only a faint
-  outline. `guidanceMix(reps, flow)` (pure, tested) puts learning first: while a move is new the paths are full and
+  (`guidance.ts`) is something to trace: for each hand a bright path of where the teacher's palm goes next (from
+  `follower.pos`, fitted to the learner's body with `fitOnto`; warm for the screen-left hand, cool for the right),
+  a bead where the palm should be now (the follower's lead; it stays put and fills a ring through a hold), and a
+  ring on the learner's own palm that locks on to its bead, tethered back to it when off. The teacher's shape is
+  only a faint outline. Where a bead or the path ahead would fall outside the picture, the hint up top asks the
+  learner to step (or sit) back rather than show an unreachable light (`outOfView`).
+  `guidanceMix(reps, flow)` (pure, tested) puts learning first: while a move is new the paths are full and
   the energy only glimmers; as it is learned the energy grows and the paths shorten and soften. Layers, back to
   front: camera, `#energy` (the energy layer, fed by one session-long `QiModel` and the segmentation mask,
   screened, its strength set each frame from the mix), `#guidance` (not screened: its lines carry a dark casing
@@ -57,7 +68,10 @@ through the webcam, matches its pose.
   unseen), only once it has lasted a moment; its hint sits up top (`#hint`), apart from the move's line.
   URL options: `?sim` (or `?sim=<speed>`) drives it with the simulated student over a synthetic dark room instead
   of the camera, and `?wander=<torso lengths>` (0.9 by default) sets how far its screen-right hand strays off the
-  path; `?replay=<url>` plays a recorded session in place of the camera (see below); `?palette=dusk|jade|ember`; `?qi=<0..1>` starts the session with that much qi and `?reps=<n>` starts each
+  path. The simulated student is built like a typical person, not like the figure; `?arms=<torso lengths>`
+  (shoulder to wrist, 1.15 typically) and `?shoulders=<torso lengths>` (0.8) change its build, to see the teacher
+  fitted to other bodies; `?replay=<url>` plays a recorded session in place of the camera (see below);
+  `?palette=dusk|jade|ember`; `?qi=<0..1>` starts the session with that much qi and `?reps=<n>` starts each
   move as if already practised n times smoothly (dev aids for looking at higher qi and the grown energy without
   practising for minutes).
 - `debug.html`, `src/debug/`: the debug panel for developing the engine: teacher and learner side by side,
@@ -72,9 +86,10 @@ Run each once, after your last edit:
 
 - `npm run check` (`tsc --noEmit`): type-check. Run after any change to `src/`.
 - `npm test` (`vitest run`): unit tests in `src/**/*.test.ts`. Run after changing matching, following, moves,
-  the qi model, the simulated student, the guidance overlay's helpers, the invitations, the tracking hints, the
-  landmark filter (`src/smoothing.ts`), the mask shrinking, the energy layer's geometry and auto frame, or recorded
-  sessions (`src/session.ts`).
+  the body fitting (`src/fit.test.ts`: palm centres, calibration, retargeting, and a learner built unlike the
+  teacher following moves to the end with every bead locked on), the qi model, the simulated student, the
+  guidance overlay's helpers, the invitations, the tracking hints, the landmark filter (`src/smoothing.ts`), the
+  mask shrinking, the energy layer's geometry and auto frame, or recorded sessions (`src/session.ts`).
   Filtering and the tracking hints on a live camera need a real person: check them on `debug.html`, or replay one
   of the owner's recorded sessions (below). Add tests for new behaviour there.
 - The energy layer's look has no automated check: open `energy.html` in the dev server (`npx vite`) and look,

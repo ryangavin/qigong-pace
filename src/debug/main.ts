@@ -1,4 +1,5 @@
-import { buildReference, Follower, type Reference } from '../follower'
+import { BodyFit, fitOnto, retarget, TYPICAL_BODY } from '../fit'
+import { buildReference, Follower, fitReference, type Reference } from '../follower'
 import { analyzeVideo, type VideoTeacher } from '../extract'
 import { DEMO_MOVES, MOVE_SETS, referenceFromMove } from '../moves'
 import { eachVideoFrame, modelFromParams, openCamera, PoseTracker } from '../pose'
@@ -74,8 +75,24 @@ const entries: Entry[] = DEMO_MOVES.map((m) => ({
 }))
 const available = () => entries.filter((e) => e.postures.includes(posture))
 let entry = available()[0] ?? entries[0]
-let ref: Reference = buildRef(entry)
+/** The learner's body, measured as they practise; the teacher is compared with them fitted to it. */
+let fit = new BodyFit(posture)
+/** The teacher as drawn or recorded, and `ref`, the same move fitted to the learner's body. */
+let teacherRef: Reference = buildRef(entry)
+let ref: Reference = fitReference(teacherRef, fit.body)
 let follower = new Follower(ref)
+
+/** Fit the teacher's move to the learner's body as now measured; the follower keeps its place. */
+function refit() {
+  ref = fitReference(teacherRef, fit.body)
+  follower.ref = ref
+}
+
+/** Measure a new learner from scratch. */
+function remeasure() {
+  fit = new BodyFit(posture)
+  refit()
+}
 
 function buildRef(e: Entry): Reference {
   if (!e.video) return referenceFromMove(DEMO_MOVES.find((m) => m.id === e.id)!, posture)
@@ -92,7 +109,9 @@ function selectEntry(e: Entry) {
     return
   }
   entry = e
-  ref = built
+  if (fit.posture !== posture) fit = new BodyFit(posture)
+  teacherRef = built
+  ref = fitReference(built, fit.body)
   const opts = follower.opts
   follower = new Follower(ref, opts)
   $('cue').textContent = posture === 'seated' && e.seatedCue ? e.seatedCue : e.cue
@@ -161,7 +180,8 @@ let stopFrames: (() => void) | null = null
 // ?model=heavy (or lite) tries another pose model.
 const model = modelFromParams(new URLSearchParams(location.search))
 
-const sim = new SimStudent()
+// Built like a typical person rather than like the teacher, so the fitting shows.
+const sim = new SimStudent({ body: TYPICAL_BODY })
 
 async function startCamera() {
   const err = $('cameraError')
@@ -200,6 +220,8 @@ function setSource(s: Source) {
   user = null
   rawPose = null
   smoother.reset()
+  // Someone new, perhaps: measure them afresh.
+  remeasure()
   $('youEmpty').hidden = s !== 'none'
   $('simControls').hidden = s !== 'sim'
   $('replayControls').hidden = s !== 'replay'
@@ -231,6 +253,7 @@ function readLearner(dt: number) {
     recorder?.add(landmarksFromPose(pose, ref.aspect), performance.now())
     user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
   }
+  if (user && fit.update(user.pose, follower.state === 'following', dt)) refit()
 }
 
 /**
@@ -431,18 +454,18 @@ function drawStool(ctx: CanvasRenderingContext2D, p: Pose, view: View, T: number
   ctx.restore()
 }
 
-/** Dots showing where each hand goes over the next couple of seconds. */
+/** Dots showing where each palm goes over the next couple of seconds. */
 function drawTrails(ctx: CanvasRenderingContext2D, from: number, view: View, dpr: number) {
-  const n = ref.poses.length
+  const n = ref.teacher.length
   const span = 2.5 * ref.fps
   const stepBy = Math.max(1, Math.round(ref.fps / 10))
   for (let i = Math.ceil(from); i < Math.min(n, from + span); i += stepBy) {
     const a = 1 - (i - from) / span
     for (const [j, color] of [
-      ['lWrist', JADE],
-      ['rWrist', AMBER],
+      ['lPalm', JADE],
+      ['rPalm', AMBER],
     ] as const) {
-      const [x, y] = toPx(view, ref.poses[i][j])
+      const [x, y] = toPx(view, ref.teacher[i][j])
       ctx.globalAlpha = 0.7 * a
       ctx.fillStyle = color
       ctx.beginPath()
@@ -465,14 +488,16 @@ function drawTeacher(lead: number) {
   const shown = follower.displayFrame(lead)
   const frame = entry.video?.frames.get(shown)
   if (frame) ctx.drawImage(frame, view.ox, view.oy, view.w, view.h)
-  else drawFigure(ctx, ref.poses[Math.round(shown)], view)
+  else drawFigure(ctx, ref.teacher[Math.round(shown)], view)
 
   drawTrails(ctx, shown, view, dpr)
 
   if (user && $<HTMLInputElement>('ghost').checked) {
-    const here = ref.poses[follower.frame]
+    // The learner redrawn on the teacher's body, so a learner in the shape lies on the teacher.
+    const here = ref.teacher[follower.frame]
+    const onTeacher = retarget(user.pose, fit.body, ref.teacherBody, ref.posture)
     ctx.globalAlpha = 0.85
-    drawSkeleton(ctx, alignPoseTo(user.pose, here, ref.posture), view, () => VERMILION, 2.5 * dpr, ref.posture)
+    drawSkeleton(ctx, alignPoseTo(onTeacher, here, ref.posture), view, () => VERMILION, 2.5 * dpr, ref.posture)
     ctx.globalAlpha = 1
   }
 }
@@ -516,6 +541,11 @@ function drawYou() {
   if (!user) return
   const target = follower.state === 'waiting' ? ref.feats[0] : ref.feats[follower.frame]
   segmentErrors(user.feats, target, errs)
+  // The teacher fitted to the learner's body and laid on them: the shape they are compared with.
+  const teacher = ref.poses[follower.state === 'waiting' ? 0 : follower.frame]
+  ctx.globalAlpha = 0.35
+  drawSkeleton(ctx, fitOnto(teacher, user.pose, ref.posture)(teacher), view, () => INK, 2.5 * dpr, ref.posture)
+  ctx.globalAlpha = 1
   drawSkeleton(ctx, user.pose, view, (i) => errorColor(errs[i]), 6 * dpr, ref.posture)
 }
 
@@ -587,8 +617,13 @@ function updateReadout() {
   else setStatus('Following you.')
   const secs = (f.pos / ref.fps).toFixed(1)
   const total = ((ref.poses.length - 1) / ref.fps).toFixed(1)
+  const b = fit.body
+  const body =
+    source === 'none'
+      ? ''
+      : ` · your arms ${(b.upperArm + b.forearm).toFixed(2)}, shoulders ${b.shoulders.toFixed(2)}${fit.settled ? '' : ' (measuring)'}`
   $('pace').textContent =
-    f.state === 'following' ? `${secs}s of ${total}s · your pace ${f.pace.toFixed(2)}×` : `${secs}s of ${total}s`
+    (f.state === 'following' ? `${secs}s of ${total}s · your pace ${f.pace.toFixed(2)}×` : `${secs}s of ${total}s`) + body
 }
 
 // ---- Qi ----------------------------------------------------------------------
