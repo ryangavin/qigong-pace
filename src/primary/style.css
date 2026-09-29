@@ -1,0 +1,293 @@
+/* The primary view: the learner's own room, dimmed to dusk, with the teacher as light over it. */
+
+:root {
+  --night: #07090c;
+  --lumen: #fff4de;
+  --gold: #f2cc8e;
+  --mist: rgba(236, 228, 212, 0.72);
+  --fade: 1.4s;
+  color-scheme: dark;
+  font-family: 'Cormorant Garamond', 'Iowan Old Style', Georgia, serif;
+  color: var(--lumen);
+  background: var(--night);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--night);
+}
+
+.layer {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Graded so light reads over it: low, desaturated, a little cool. */
+.camera video,
+.camera canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.5) saturate(0.35) contrast(1.08);
+}
+
+.camera video {
+  transform: scaleX(-1);
+}
+
+.camera [hidden] {
+  display: none;
+}
+
+.grade {
+  background:
+    radial-gradient(ellipse 75% 70% at 50% 45%, transparent 35%, rgba(3, 4, 7, 0.85) 100%),
+    linear-gradient(rgb(28 44 64 / 0.32), rgb(28 44 64 / 0.32));
+}
+
+/* Light layers: screened, so they only ever add light. The energy layer is
+   the slot for src/energy/; the guidance overlay draws the teacher. */
+.energy,
+#guidance {
+  mix-blend-mode: screen;
+}
+
+/* ---- Chrome: present when wanted, gone during practice ---- */
+
+.chrome {
+  transition: opacity var(--fade) ease;
+}
+
+body.still .chrome:not(:focus-within) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.still {
+  cursor: none;
+}
+
+.corner {
+  position: fixed;
+  display: flex;
+  gap: 18px;
+  align-items: baseline;
+}
+
+.top-left {
+  top: clamp(16px, 3vw, 32px);
+  left: clamp(16px, 3.5vw, 40px);
+}
+
+.top-right {
+  top: clamp(16px, 3vw, 32px);
+  right: clamp(16px, 3.5vw, 40px);
+}
+
+/* On a phone the controls sit under the move's name. */
+@media (max-width: 640px) {
+  .top-right {
+    top: 64px;
+    left: 16px;
+    right: 16px;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+  }
+}
+
+.bottom-right {
+  bottom: clamp(14px, 2.5vw, 26px);
+  right: clamp(16px, 3.5vw, 40px);
+}
+
+button,
+select,
+.quiet {
+  font: inherit;
+  color: var(--mist);
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  transition: color 0.4s ease;
+}
+
+button:hover,
+select:hover,
+.quiet:hover {
+  color: var(--lumen);
+}
+
+:focus-visible {
+  outline: 1px solid var(--gold);
+  outline-offset: 6px;
+}
+
+/* The move's name is its own chooser. */
+select {
+  appearance: none;
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 400;
+  max-width: min(70vw, 520px);
+  text-overflow: ellipsis;
+}
+
+select option,
+select optgroup {
+  background: #14171c;
+  color: var(--lumen);
+}
+
+.top-right button {
+  font-size: 18px;
+  font-style: italic;
+}
+
+#posture {
+  display: flex;
+  gap: 14px;
+}
+
+#posture button[aria-pressed='false'] {
+  color: rgba(236, 228, 212, 0.38);
+}
+
+#posture button[aria-pressed='false']:hover {
+  color: var(--mist);
+}
+
+.debug-link {
+  font-size: 13px;
+  color: rgba(236, 228, 212, 0.28);
+  text-decoration: none;
+}
+
+.debug-link:hover {
+  color: var(--mist);
+}
+
+/* ---- Before the camera ---- */
+
+.intro {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.intro[hidden] {
+  display: none;
+}
+
+.intro h1 {
+  margin: 0;
+  font-weight: 400;
+  font-size: clamp(44px, 7vw, 84px);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  text-shadow: 0 0 40px rgba(242, 204, 142, 0.35);
+}
+
+.intro p {
+  margin: 0 0 28px;
+  font-style: italic;
+  font-size: clamp(19px, 2vw, 24px);
+  color: var(--mist);
+}
+
+.intro button {
+  font-size: 24px;
+  color: var(--lumen);
+  padding: 8px 26px;
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 1px rgba(242, 204, 142, 0.35),
+    0 0 36px rgba(242, 204, 142, 0.14);
+}
+
+.intro .quiet {
+  margin-top: 8px;
+  font-size: 16px;
+  font-style: italic;
+  color: rgba(236, 228, 212, 0.45);
+  text-decoration: none;
+}
+
+.intro .error {
+  margin-top: 12px;
+  font-size: 17px;
+  color: var(--gold);
+}
+
+/* ---- The one line of words, and the hairline of progress ---- */
+
+.line {
+  position: fixed;
+  left: 50%;
+  bottom: clamp(48px, 11vh, 110px);
+  transform: translateX(-50%);
+  width: min(92vw, 34em);
+  margin: 0;
+  text-align: center;
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(21px, 2.5vw, 32px);
+  line-height: 1.35;
+  color: var(--lumen);
+  text-shadow:
+    0 0 18px rgba(242, 204, 142, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.7s ease;
+  pointer-events: none;
+}
+
+.line.shown {
+  opacity: 0.9;
+  transition-duration: 1.6s;
+}
+
+.progress {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+}
+
+#progress {
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--gold));
+  opacity: 0.5;
+  transform-origin: left;
+  transform: scaleX(0);
+  box-shadow: 0 0 8px rgba(242, 204, 142, 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fade: 0.2s;
+  }
+  .line,
+  .line.shown {
+    transition-duration: 0.2s;
+  }
+}

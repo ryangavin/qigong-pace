@@ -1,7 +1,9 @@
-import { buildReference, Follower, type Reference } from './follower'
-import { analyzeVideo, type VideoTeacher } from './extract'
-import { DEMO_MOVES, MOVE_SETS, referenceFromMove } from './moves'
-import { PoseTracker } from './pose'
+import { buildReference, Follower, type Reference } from '../follower'
+import { analyzeVideo, type VideoTeacher } from '../extract'
+import { DEMO_MOVES, MOVE_SETS, referenceFromMove } from '../moves'
+import { PoseTracker } from '../pose'
+import { loadPosture, savePosture } from '../prefs'
+import { SimStudent } from '../sim'
 import {
   alignPoseTo,
   cleanTrack,
@@ -17,7 +19,7 @@ import {
   type Pose,
   type Posture,
   type View,
-} from './skeleton'
+} from '../skeleton'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
@@ -45,18 +47,6 @@ interface Entry {
 const VIDEO_SET = 'Videos'
 
 // ---- Posture -----------------------------------------------------------------
-
-const POSTURE_KEY = 'qigong-pace.posture'
-
-function loadPosture(): Posture {
-  try {
-    const saved = localStorage.getItem(POSTURE_KEY)
-    if (saved && (POSTURES as readonly string[]).includes(saved)) return saved as Posture
-  } catch {
-    // Storage can be blocked; standing is the default.
-  }
-  return 'standing'
-}
 
 let posture = loadPosture()
 
@@ -119,11 +109,7 @@ function renderMoveList() {
 
 function setPosture(p: Posture) {
   posture = p
-  try {
-    localStorage.setItem(POSTURE_KEY, p)
-  } catch {
-    // Not remembered, but still applied.
-  }
+  savePosture(p)
   for (const b of document.querySelectorAll<HTMLButtonElement>('#posture button')) {
     b.setAttribute('aria-pressed', String(b.dataset.posture === p))
   }
@@ -147,7 +133,7 @@ cam.playsInline = true
 let lastCamTime = -1
 let user: { pose: Pose; feats: Features; aspect: number } | null = null
 
-const sim = { pos: 0, speed: 0.4, paused: false }
+const sim = new SimStudent()
 
 async function startCamera() {
   const err = $('cameraError')
@@ -180,13 +166,6 @@ function startSim() {
   follower.reset()
 }
 
-// Deterministic jitter so the simulated student looks tracked, not perfect.
-let seed = 1
-const jitter = () => {
-  seed = (seed * 1664525 + 1013904223) % 4294967296
-  return (seed / 4294967296 - 0.5) * 0.006
-}
-
 function readLearner(dt: number) {
   if (source === 'camera' && camTracker && cam.readyState >= 2) {
     if (cam.currentTime === lastCamTime) return
@@ -200,13 +179,7 @@ function readLearner(dt: number) {
     const pose = poseFromLandmarks(lm, { aspect, flipX: true, facingAway: false })
     user = { pose, feats: computeFeatures(pose, ref.posture), aspect }
   } else if (source === 'sim') {
-    if (follower.state === 'following' && !sim.paused) {
-      sim.pos = Math.min(ref.poses.length - 1, sim.pos + sim.speed * ref.fps * dt)
-    }
-    if (follower.state === 'waiting') sim.pos = 0
-    const base = ref.poses[Math.round(sim.pos)]
-    const pose = {} as Pose
-    for (const [k, p] of Object.entries(base)) pose[k as keyof Pose] = { x: p.x + jitter(), y: p.y + jitter(), v: 0.95 }
+    const pose = sim.step(follower, dt)
     user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
   }
 }

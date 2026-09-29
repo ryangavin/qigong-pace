@@ -15,18 +15,27 @@ through the webcam, matches its pose.
   values per frame (`QiFrame`) for the qi view; pure numbers, no drawing. `track.ts` reads what a
   reference implies (breath, reach, sink). The dynamics are grounded in `docs/sensations.md`, the
   research on what practitioners feel; keep the two in step.
-- `src/main.ts`, `index.html`, `src/style.css`: the app.
+- `src/sim.ts`: the simulated student, for working without a webcam. `src/prefs.ts`: the remembered posture.
+- `index.html`, `src/primary/`: the primary view. The mirrored webcam full-bleed and graded dark, with the teacher
+  as a luminous ghost over the learner's own body (`guidance.ts`). Layers, back to front: camera, `#energy`
+  (the slot for the qi-energy layer, screened), `#guidance`, chrome. `?sim` (or `?sim=<speed>`) drives it with
+  the simulated student over a synthetic dark room instead of the camera.
+- `debug.html`, `src/debug/`: the debug panel for developing the engine: teacher and learner side by side,
+  timeline, pace, sliders and video import.
+- `vite.config.ts` makes every root-level `*.html` a build entry, so a new page needs no config change.
 
 ## Tests and checks
 
 Run each once, after your last edit:
 
 - `npm run check` (`tsc --noEmit`): type-check. Run after any change to `src/`.
-- `npm test` (`vitest run`): unit tests in `src/**/*.test.ts`. Run after changing matching, following, moves or the qi model.
+- `npm test` (`vitest run`): unit tests in `src/**/*.test.ts`. Run after changing matching, following, moves,
+  the qi model, the simulated student or the guidance overlay's helpers.
   Add tests for new behaviour there.
 - `npm run build` (type-check plus `vite build`): run when you touch `index.html`, CSS, imports or build config.
 
 CI (`.github/workflows/ci.yml`) runs the type-check, unit tests and `vite build`
 on every PR and on pushes to `main`; it is the final check.
 
-The app itself needs a webcam; the "simulated student" button exercises it without one.
+The app itself needs a webcam; without one, open the primary view at `/?sim` or use the debug panel's
+"simulated student" button.
