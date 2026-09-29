@@ -24,6 +24,7 @@ function run(inv: Invitations, seconds: number, step: Step = {}, from = { t: 0 }
       practising: step.practising ?? true,
       inHold: step.inHold ?? false,
       standing: step.standing ?? true,
+      repeated: step.repeated ?? true,
       busy: step.busy ?? false,
     })
     shown.push(got?.id ?? null)
@@ -43,6 +44,13 @@ describe('Invitations', () => {
     const idle = new Invitations()
     run(idle, 60, { q: palms, practising: false })
     expect(run(idle, 20, { q: palms }).every((s) => s === null)).toBe(true)
+  })
+
+  it('wait until the move has been done through once', () => {
+    const inv = new Invitations()
+    expect(run(inv, 120, { q: palms, repeated: false }).every((s) => s === null)).toBe(true)
+    // The first repetition ends: the practice before it counts toward the warm-up.
+    expect(firstAt(run(inv, 10, { q: palms }))).toBeLessThan(0.5)
   })
 
   it('invite the palms to notice the ball when the palm field is strong', () => {

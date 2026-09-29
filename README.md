@@ -18,6 +18,11 @@ stop and they wait, hold a posture and the hold plays out with you.
 - **Answers your form.** Where a limb matches, the teacher's light fuses with
   it and brightens; where it's off, motes drift from your limb toward the
   shape. (The debug panel colours each limb green, amber or red instead.)
+- **Qi you can see.** As you practise slowly and in step, a soft sea of
+  energy gathers in your body and around it: in the palms, below the navel,
+  down to the feet, up through the crown. It follows your real silhouette.
+  Now and then, once you know the move, a quiet line invites you to notice a
+  sensation practitioners report (see [docs/sensations.md](docs/sensations.md)).
 - **35 built-in moves** from Ba Duan Jin, Shibashi, Yi Jin Jing, Wu Qin Xi,
   Liu Zi Jue and standalone practice. See [docs/move-catalog.md](docs/move-catalog.md).
 - **Standing or seated** practice. Seated follows the upper body only.
@@ -39,7 +44,9 @@ Open the printed URL, click **Start camera** and step back until your whole
 body is in view (or choose Seated). The teacher appears as a soft light over
 your own body; move the pointer to bring back the move list.
 **Watch a simulated student instead** (or `/?sim`) shows it working without a
-camera.
+camera. `?palette=jade` (or `ember`; `dusk` is the default) changes the
+energy's colours, and `?qi=0.8` starts with that much qi gathered, for looking
+at the view without practising for minutes first.
 
 `/debug.html` is the debug panel for working on the engine: the teacher and
 you side by side, a timeline, your pace, the matching sliders and loading a

@@ -32,6 +32,8 @@ export interface EnergyLayerOptions {
   maxSimHeight?: number
   /** Cap on device pixels per CSS pixel for the canvas; the light is soft, so 1 is plenty. */
   maxPixelRatio?: number
+  /** Overall strength of the light, 0..1: the final colour is scaled by it. 1 (the default) is the look as tuned. */
+  strength?: number
 }
 
 export interface EnergyLayer {
@@ -76,6 +78,7 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
   const simScale = opts.simScale ?? 0.5
   const maxSimHeight = opts.maxSimHeight ?? 540
   const maxPixelRatio = opts.maxPixelRatio ?? 1
+  const strength = Math.min(1, Math.max(0, opts.strength ?? 1))
 
   // Everything the context owns; made again when a lost context comes back.
   let floatTargets = false
@@ -300,6 +303,7 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
     gl!.uniform3fv(c.loc('uSeaLight'), palette.seaLight)
     gl!.uniform3fv(c.loc('uBody'), palette.body)
     gl!.uniform3fv(c.loc('uCore'), palette.core)
+    c.f('uStrength', strength)
     draw(null)
   }
 

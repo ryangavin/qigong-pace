@@ -3,7 +3,8 @@ import type { QiFrame } from '../qi'
 // Gentle invitations to notice a sensation, offered when the qi model shows
 // the state in which practitioners report it (docs/sensations.md). They
 // invite and never assert: "notice", "you may feel", a question. Rare by
-// design: one at a time, none early in practice, each at most once every few
+// design: one at a time, none early in practice or before the move has been
+// done through once, each at most once every few
 // minutes, and never over other words on the line. Pure logic, no drawing
 // and no clock: time only moves by the `dt` it's given.
 
@@ -110,6 +111,11 @@ export interface InvitationInput {
   practising: boolean
   inHold: boolean
   standing: boolean
+  /**
+   * The learner has done the current move through at least once. Until then
+   * their attention belongs on the shape, so nothing is offered.
+   */
+  repeated: boolean
   /** Other words are on the line (a move's cue, a prompt): no invitation shows. */
   busy: boolean
 }
@@ -130,7 +136,7 @@ export class Invitations {
 
   constructor(private opts: InvitationOptions = DEFAULT_INVITATION_OPTIONS) {}
 
-  update({ q, dt, practising, inHold, standing, busy }: InvitationInput): Invitation | null {
+  update({ q, dt, practising, inHold, standing, repeated, busy }: InvitationInput): Invitation | null {
     const o = this.opts
     this.clock += dt
     if (practising) this.practised += dt
@@ -155,7 +161,7 @@ export class Invitations {
       }
       return this.current
     }
-    if (busy || !practising || this.practised < o.warmupSec || this.quiet < o.quietSec) return null
+    if (busy || !practising || !repeated || this.practised < o.warmupSec || this.quiet < o.quietSec) return null
     if (this.clock - this.lastEnd < o.gapSec) return null
     for (const e of INVITATIONS) {
       if ((this.dwell.get(e.id) ?? 0) < e.dwell) continue

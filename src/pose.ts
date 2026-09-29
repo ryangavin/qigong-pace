@@ -1,6 +1,6 @@
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
 import type { MaskData } from './energy/layer'
-import { shrinkMask } from './mask'
+import { MaskReader } from './maskReader'
 import type { LandmarkLike } from './skeleton'
 
 // Keep in step with the @mediapipe/tasks-vision version in package.json.
@@ -12,9 +12,11 @@ let fileset: ReturnType<typeof FilesetResolver.forVisionTasks> | undefined
 
 export interface PoseTrackerOptions {
   /**
-   * Also segment the person, for the energy layer's silhouette. Reading the
-   * mask back costs time every frame it's read, so it's read only every
-   * `maskEvery` frames and shrunk to `maskWidth` pixels across.
+   * Also segment the person, for the energy layer's silhouette. The mask is
+   * shrunk to `maskWidth` pixels across (256) and read every `maskEvery`
+   * frames (1). Measured on an M1 Max in Chrome at 1280×720, GPU delegate:
+   * the segmentation adds no measurable time to detection (about 20 ms either
+   * way), and reading the mask back costs about 0.8 ms a frame (see MaskReader).
    */
   segmentation?: boolean
   maskEvery?: number
@@ -31,6 +33,7 @@ export class PoseTracker {
   mask: MaskData | null = null
   /** Milliseconds the last mask read took, for measuring its cost. */
   maskMs = 0
+  private masks: MaskReader | null = null
 
   private constructor(
     private landmarker: PoseLandmarker,
@@ -66,9 +69,10 @@ export class PoseTracker {
         this.mask = null
         return
       }
-      if (this.frames++ % (this.opts.maskEvery ?? 2) !== 0 && this.mask) return
+      if (this.frames++ % (this.opts.maskEvery ?? 1) !== 0 && this.mask) return
       const start = performance.now()
-      this.mask = shrinkMask(m.getAsFloat32Array(), m.width, m.height, this.opts.maskWidth ?? 256, !!this.opts.flipX, this.mask)
+      this.masks ??= new MaskReader(this.opts.maskWidth ?? 256, !!this.opts.flipX)
+      this.mask = this.masks.read(m)
       this.maskMs = performance.now() - start
     })
     return landmarks

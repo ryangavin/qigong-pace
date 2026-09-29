@@ -405,6 +405,8 @@ uniform vec3 uSeaDeep;
 uniform vec3 uSeaLight;
 uniform vec3 uBody;
 uniform vec3 uCore;
+// Overall strength of the light, 0..1 (1 as tuned).
+uniform float uStrength;
 
 float hash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -426,6 +428,7 @@ void main() {
   col += vec3(1.0) * max(heat - 0.9, 0.0) * 0.2;
   col = 1.0 - exp(-col * mix(0.9, 1.2, uLevel));
   col = pow(col, vec3(1.0 / 2.2));
+  col *= uStrength;
   col += (hash(gl_FragCoord.xy + fract(uTime) * 61.0) - 0.5) / 255.0;
   o = vec4(col, 1.0);
 }`
