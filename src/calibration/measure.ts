@@ -145,6 +145,8 @@ export interface TaskMeasures {
   found: number
   /** Detections a second. */
   hz: number
+  /** Detections the landmark filter passed over as implausible. */
+  rejected: number
   match: Match | null
   /** Seconds from the prompt until the learner settled into the shape they then held (not for the moving tasks). */
   settledAfter: number | null
@@ -177,7 +179,8 @@ export interface Measurements {
   counts: Record<Part, number>
   /** Shoulder to palm, in the posture's body lengths. */
   arm: number
-  detection: { hz: number; found: number }
+  /** Detections a second, the share that found someone, and how many the filter passed over as implausible. */
+  detection: { hz: number; found: number; rejected: number }
   joints: Record<Joint, JointSeen>
   envelope: Envelope
   /** From the overhead task (see `TaskDetail`); null inside where the palms were never seen. */
@@ -204,6 +207,8 @@ export interface Sample {
   raw: Pose | null
   /** Through the landmark filter, as the pages have it. */
   pose: Pose | null
+  /** The filter passed this detection over as implausible (a collapsed, swapped or leaping body). */
+  rejected: boolean
 }
 
 /** A task's recording decoded, each detection read raw and through a fresh `LandmarkFilter`. */
@@ -213,6 +218,7 @@ export function samplesOf(task: RecordedTask, aspect: number): Sample[] {
   const ph = task.phases
   return task.frames.map((f) => {
     const { t, landmarks } = decodeFrame(f)
+    const before = filter.rejected
     const lm = filter.update(landmarks, t)
     const phase: Phase = !ph || t >= ph.capture ? 'capture' : t >= ph.settle ? 'settle' : 'prompt'
     return {
@@ -220,6 +226,7 @@ export function samplesOf(task: RecordedTask, aspect: number): Sample[] {
       phase,
       raw: landmarks ? poseFromLandmarks(landmarks, opts) : null,
       pose: lm ? poseFromLandmarks(lm, opts) : null,
+      rejected: filter.rejected > before,
     }
   })
 }
@@ -595,6 +602,7 @@ export function measure(rec: CalibrationRecording): Measurements {
       frames: ss?.length ?? 0,
       found: ss?.length ? found / ss.length : 0,
       hz: seconds > 0 ? (ss!.length - 1) / seconds : 0,
+      rejected: ss ? ss.filter((s) => s.rejected).length : 0,
     }
     if (!ss) {
       return { ...base, match: null, settledAfter: null, joints: jointsSeen([], aspect), lengths: {}, reach: { l: null, r: null }, detail: {} }
@@ -658,6 +666,7 @@ export function measure(rec: CalibrationRecording): Measurements {
     detection: {
       hz: median(tasks.filter((t) => t.hz > 0).map((t) => t.hz)) ?? 0,
       found: all.length ? all.filter((s) => s.raw).length / all.length : 0,
+      rejected: all.filter((s) => s.rejected).length,
     },
     joints: mergeJoints(
       tasks.map((t) => t.joints),

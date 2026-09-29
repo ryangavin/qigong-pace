@@ -232,6 +232,14 @@ export function describe(m: Measurements, audit: Audit | null, rec: Pick<Calibra
     out.push(`The camera lost ${list(words)}.`)
   }
 
+  const rejected = m.detection.rejected
+  if (rejected) {
+    const worst = [...done].sort((a, b) => b.rejected - a.rejected)[0]
+    out.push(
+      `The tracker muddled your body ${rejected} time${rejected === 1 ? '' : 's'} for a moment (most in ${titleOf(worst.id)}); those were passed over.`,
+    )
+  }
+
   const threshold = DEFAULT_OPTIONS.matchThreshold
   const off = done.filter((t) => t.match && !t.id.match(/circles|water/) && (t.match.distance === null || t.match.distance > threshold))
   if (off.length) out.push(`These shapes didn't read as asked: ${list(off.map((t) => titleOf(t.id)))}.`)

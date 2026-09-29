@@ -295,11 +295,15 @@ function showHint(text: string, count = false) {
 
 const hints = new TrackingHints()
 
-/** The countdown, or while capturing a word to keep going; the camera's troubles come first (not the hands leaving, which is measured). */
+/**
+ * The countdown, or while capturing a word to keep going. The camera's
+ * troubles come first, but not the hands leaving the picture (seated, that is
+ * what 'low' is judged by too): where they go is what is being measured.
+ */
 function updateHint(now: number, dt: number) {
   if (state !== 'running') return
   const trouble = source === 'camera' ? hints.update({ pose: learner, aspect: aspectNow(), posture, dt }) : null
-  if (trouble && trouble !== 'hands') return showHint(hints.text(posture))
+  if (trouble && trouble !== 'hands' && (trouble !== 'low' || posture === 'standing')) return showHint(hints.text(posture))
   const t = (now - taskStart) / 1000
   if (phase === 'settle') return showHint(String(Math.ceil(PROMPT_SEC + SETTLE_SEC - t)), true)
   if (phase === 'capture') return showHint(current().moving ? 'Keep going, slowly.' : 'Hold it there, and breathe.')

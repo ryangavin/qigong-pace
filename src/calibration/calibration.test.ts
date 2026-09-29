@@ -66,6 +66,7 @@ describe('measuring a body of known proportions', () => {
   }, SLOW)
 
   it('measures each task, and how closely its shape came out', () => {
+    expect(m.detection.rejected).toBe(0)
     for (const t of m.tasks) {
       expect(t.status).toBe('done')
       expect(t.hz).toBeGreaterThan(25)
