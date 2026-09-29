@@ -139,7 +139,7 @@ export interface Features {
   vis: Float32Array
 }
 
-function jointOf(p: Pose, j: Segment['a']): Pt {
+export function jointOf(p: Pose, j: Segment['a']): Pt {
   if (j === 'midShoulder') return mid(p.lShoulder, p.rShoulder)
   if (j === 'midHip') return mid(p.lHip, p.rHip)
   return p[j]
@@ -248,15 +248,22 @@ export function cleanTrack(track: (Pose | null)[], radius = 2): Pose[] {
  * Seated, it lines up the shoulders instead.
  */
 export function alignPoseTo(p: Pose, target: Pose, posture: Posture = 'standing'): Pose {
+  const move = alignment(p, target, posture)
+  const out = {} as Pose
+  for (const j of JOINTS) out[j] = move(p[j])
+  return out
+}
+
+/**
+ * The move `alignPoseTo` makes, as a function of a point, so other points
+ * (such as where a hand goes next) can follow the same body.
+ */
+export function alignment(p: Pose, target: Pose, posture: Posture = 'standing'): (q: Pt) => Pt {
   const s = bodyScale(target, posture) / bodyScale(p, posture)
   const anchor = (q: Pose) => (posture === 'standing' ? mid(q.lHip, q.rHip) : mid(q.lShoulder, q.rShoulder))
   const from = anchor(p)
   const to = anchor(target)
-  const out = {} as Pose
-  for (const j of JOINTS) {
-    out[j] = { x: to.x + (p[j].x - from.x) * s, y: to.y + (p[j].y - from.y) * s, v: p[j].v }
-  }
-  return out
+  return (q) => ({ x: to.x + (q.x - from.x) * s, y: to.y + (q.y - from.y) * s, v: q.v })
 }
 
 export interface View {
@@ -273,6 +280,12 @@ export function containView(w: number, h: number, aspect: number): View & { w: n
   const dw = Math.min(w, h * aspect)
   const dh = dw / aspect
   return { ox: (w - dw) / 2, oy: (h - dh) / 2, s: dh, w: dw, h: dh }
+}
+
+/** Fill a w×h box with an image of `aspect`, centred and cropped (CSS `object-fit: cover`). */
+export function coverView(w: number, h: number, aspect: number): View {
+  const s = Math.max(h, w / aspect)
+  return { ox: (w - aspect * s) / 2, oy: (h - s) / 2, s }
 }
 
 export function drawSkeleton(

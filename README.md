@@ -12,10 +12,12 @@ stop and they wait, hold a posture and the hold plays out with you.
 - **Follows your pace.** Each frame, the teacher's move is searched a little
   way ahead for the shape that matches yours, and the teacher eases there. It
   never goes backwards and waits if you lose the shape.
-- **Shows where you're going.** The teacher runs slightly ahead of you (the
-  "look ahead" slider), with dots tracing where each hand goes next.
-- **Colours your form.** Your skeleton is drawn over the mirrored webcam, each
-  limb green, amber or red by how closely it matches.
+- **Shows where you're going.** The teacher is a soft light over your own
+  mirrored body, running slightly ahead of you, its hands trailing light
+  along where they go next.
+- **Answers your form.** Where a limb matches, the teacher's light fuses with
+  it and brightens; where it's off, motes drift from your limb toward the
+  shape. (The debug panel colours each limb green, amber or red instead.)
 - **35 built-in moves** from Ba Duan Jin, Shibashi, Yi Jin Jing, Wu Qin Xi,
   Liu Zi Jue and standalone practice. See [docs/move-catalog.md](docs/move-catalog.md).
 - **Standing or seated** practice. Seated follows the upper body only.
@@ -34,8 +36,14 @@ npm run dev
 ```
 
 Open the printed URL, click **Start camera** and step back until your whole
-body is in view (or choose Seated). **Try with a simulated student** shows it
-working without a camera.
+body is in view (or choose Seated). The teacher appears as a soft light over
+your own body; move the pointer to bring back the move list.
+**Watch a simulated student instead** (or `/?sim`) shows it working without a
+camera.
+
+`/debug.html` is the debug panel for working on the engine: the teacher and
+you side by side, a timeline, your pace, the matching sliders and loading a
+teacher from a video.
 
 ## Develop
 
