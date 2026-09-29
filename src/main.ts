@@ -83,12 +83,12 @@ function buildRef(e: Entry): Reference {
 }
 
 function selectEntry(e: Entry) {
-  entry = e
   const built = buildRef(e)
   if (built.poses.length < 2) {
     setStatus('No one could be found in that video.')
     return
   }
+  entry = e
   ref = built
   const opts = follower.opts
   follower = new Follower(ref, opts)
