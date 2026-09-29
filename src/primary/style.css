@@ -178,6 +178,49 @@ select optgroup {
   color: var(--mist);
 }
 
+/* ---- Recording a session, and replaying one ---- */
+
+.bottom-left {
+  bottom: clamp(14px, 2.5vw, 26px);
+  left: clamp(16px, 3.5vw, 40px);
+}
+
+.session {
+  font-size: 13px;
+  color: rgba(236, 228, 212, 0.4);
+}
+
+.session button {
+  font-size: 13px;
+  color: rgba(236, 228, 212, 0.4);
+}
+
+.session button:hover,
+.session button[aria-pressed='true'] {
+  color: var(--mist);
+}
+
+.session [hidden] {
+  display: none;
+}
+
+.record-dot {
+  position: fixed;
+  bottom: clamp(14px, 2.5vw, 26px);
+  left: 6px;
+  width: 6px;
+  height: 6px;
+  margin-bottom: 5px;
+  border-radius: 50%;
+  background: #c8553d;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.record-dot[hidden] {
+  display: none;
+}
+
 /* ---- Before the camera ---- */
 
 .intro {

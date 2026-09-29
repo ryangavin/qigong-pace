@@ -301,6 +301,26 @@ input[type='range'] {
   flex-wrap: wrap;
 }
 
+.replay .range {
+  min-width: min(320px, 70vw);
+}
+
+.replay-name {
+  color: var(--ink-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.button[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.button[aria-pressed='true'] {
+  border-color: var(--vermilion);
+  color: var(--vermilion);
+}
+
 .overlay {
   position: fixed;
   inset: 0;

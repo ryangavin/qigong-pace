@@ -36,8 +36,15 @@
         <button id="again" type="button" hidden>Begin again</button>
         <button id="useCamera" type="button" hidden>Start camera</button>
       </div>
+      <!-- Record the session's tracked landmarks (no images) to send to the developers; R does the same. -->
+      <div class="corner bottom-left session">
+        <button id="record" type="button" aria-pressed="false" aria-keyshortcuts="r" hidden>Record</button>
+        <span id="replayNote" aria-live="polite"></span>
+      </div>
       <a class="corner bottom-right debug-link" href="debug.html">debug</a>
     </div>
+    <!-- Stays, faintly, while recording, even when the chrome has faded. -->
+    <span id="recordDot" class="record-dot" title="Recording" hidden></span>
 
     <section id="intro" class="intro">
       <h1>At your pace</h1>
