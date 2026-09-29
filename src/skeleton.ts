@@ -13,6 +13,10 @@ export const JOINTS = [
   'rElbow',
   'lWrist',
   'rWrist',
+  // The centre of each palm: what the learner puts into the light, about a
+  // hand's width beyond the wrist.
+  'lPalm',
+  'rPalm',
   'lHip',
   'rHip',
   'lKnee',
@@ -42,6 +46,8 @@ const MP = {
   shoulder: [11, 12],
   elbow: [13, 14],
   wrist: [15, 16],
+  pinky: [17, 18],
+  index: [19, 20],
   hip: [23, 24],
   knee: [25, 26],
   ankle: [27, 28],
@@ -62,6 +68,8 @@ export function poseFromLandmarks(lm: LandmarkLike[], opts: LandmarkOptions): Po
   const leftIsAnatomicalLeft = opts.flipX !== opts.facingAway
   const pt = (i: number): Pt => {
     const p = lm[i]
+    // Some sources only carry the body's main landmarks: a missing one is unseen.
+    if (!p) return { x: 0, y: 0, v: 0 }
     const x = opts.flipX ? 1 - p.x : p.x
     return { x: x * opts.aspect, y: p.y, v: p.visibility ?? 1 }
   }
@@ -70,6 +78,10 @@ export function poseFromLandmarks(lm: LandmarkLike[], opts: LandmarkOptions): Po
   const [lShoulder, rShoulder] = side(MP.shoulder)
   const [lElbow, rElbow] = side(MP.elbow)
   const [lWrist, rWrist] = side(MP.wrist)
+  const [lIndex, rIndex] = side(MP.index)
+  const [lPinky, rPinky] = side(MP.pinky)
+  const lPalm = palmCentre(lWrist, lElbow, lIndex, lPinky)
+  const rPalm = palmCentre(rWrist, rElbow, rIndex, rPinky)
   const [lHip, rHip] = side(MP.hip)
   const [lKnee, rKnee] = side(MP.knee)
   const [lAnkle, rAnkle] = side(MP.ankle)
@@ -81,6 +93,8 @@ export function poseFromLandmarks(lm: LandmarkLike[], opts: LandmarkOptions): Po
     rElbow,
     lWrist,
     rWrist,
+    lPalm,
+    rPalm,
     lHip,
     rHip,
     lKnee,
@@ -88,6 +102,31 @@ export function poseFromLandmarks(lm: LandmarkLike[], opts: LandmarkOptions): Po
     lAnkle,
     rAnkle,
   }
+}
+
+/**
+ * How far the palm's centre lies beyond the wrist, as a share of the forearm,
+ * for when the fingers can't be seen: the wrist crease to the knuckles is
+ * about 0.058 of a person's height and the forearm about 0.146 (Drillis and
+ * Contini), and the palm's centre is two thirds of the way to the knuckles.
+ */
+export const HAND_PER_FOREARM = 0.27
+
+/**
+ * The centre of the palm, from MediaPipe's wrist and its index and pinky
+ * points (which sit about at the knuckles): the middle of the three. Where the
+ * fingers are unseen, it falls back smoothly to a point along the forearm, or
+ * to the wrist itself when the elbow is unseen too. It is as visible as the wrist.
+ */
+export function palmCentre(wrist: Pt, elbow: Pt, index?: Pt, pinky?: Pt): Pt {
+  const k = elbow.v >= 0.35 ? HAND_PER_FOREARM : 0
+  const x = wrist.x + (wrist.x - elbow.x) * k
+  const y = wrist.y + (wrist.y - elbow.y) * k
+  const w = index && pinky ? confidence(Math.min(index.v, pinky.v)) : 0
+  if (w <= 0) return { x, y, v: wrist.v }
+  const cx = (wrist.x + index!.x + pinky!.x) / 3
+  const cy = (wrist.y + index!.y + pinky!.y) / 3
+  return { x: x + (cx - x) * w, y: y + (cy - y) * w, v: wrist.v }
 }
 
 const mid = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, v: Math.min(a.v, b.v) })
@@ -117,6 +156,11 @@ export const SEGMENTS: Segment[] = [
   { name: 'lForearm', a: 'lElbow', b: 'lWrist', weight: 1, draw: true, lower: false },
   { name: 'rUpperArm', a: 'rShoulder', b: 'rElbow', weight: 1, draw: true, lower: false },
   { name: 'rForearm', a: 'rElbow', b: 'rWrist', weight: 1, draw: true, lower: false },
+  // The hands are drawn but not matched: where the palm goes is judged by the
+  // lights (the guidance's lock-on), and the bend of the wrist, which the
+  // built-in figure cannot show, would only add error to the shape.
+  { name: 'lHand', a: 'lWrist', b: 'lPalm', weight: 0, draw: true, lower: false },
+  { name: 'rHand', a: 'rWrist', b: 'rPalm', weight: 0, draw: true, lower: false },
   { name: 'lThigh', a: 'lHip', b: 'lKnee', weight: 0.6, draw: true, lower: true },
   { name: 'lShin', a: 'lKnee', b: 'lAnkle', weight: 0.4, draw: true, lower: true },
   { name: 'rThigh', a: 'rHip', b: 'rKnee', weight: 0.6, draw: true, lower: true },
@@ -155,7 +199,7 @@ export function torsoLength(p: Pose): number {
 
 // Shoulder width in torso lengths (the built-in figure's proportion), so a
 // seated body measured by its shoulders comes out in the same units.
-const SHOULDERS_PER_TORSO = 0.84
+export const SHOULDERS_PER_TORSO = 0.84
 
 /**
  * The length features are measured in: torso length standing; seated, the

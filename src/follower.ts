@@ -1,3 +1,4 @@
+import { measureBody, retarget, type Proportions } from './fit'
 import { computeFeatures, distance, type Features, type Pose, type Posture } from './skeleton'
 
 /** A move to learn: the teacher's pose at a fixed frame rate. */
@@ -8,21 +9,44 @@ export interface Reference {
   aspect: number
   /** How `feats` were measured; the learner's features must be measured the same way. */
   posture: Posture
+  /** The teacher's move on the body it is compared with: the teacher's own, or the learner's once fitted. */
   poses: Pose[]
   feats: Features[]
   /** How fast the teacher's shape is changing at each frame, per second. Near zero during holds. */
   motion: Float32Array
+  /** The proportions `poses` are drawn with. */
+  body: Proportions
+  /** The teacher's own move, as recorded or drawn: what the teacher looks like. */
+  teacher: Pose[]
+  /** The teacher's own proportions. */
+  teacherBody: Proportions
 }
 
 const LOOKAHEAD_SEC = 0.3
 
+/** A teacher's move. `teacherBody` is the teacher's proportions, measured from the poses if not given. */
 export function buildReference(
   name: string,
   fps: number,
   aspect: number,
   poses: Pose[],
   posture: Posture = 'standing',
+  teacherBody: Proportions = measureBody(poses, posture),
 ): Reference {
+  return { name, fps, aspect, posture, ...shapeOf(poses, fps, posture), body: teacherBody, teacher: poses, teacherBody }
+}
+
+/**
+ * The teacher's move redrawn on a body of proportions `body` (the learner's,
+ * from a `BodyFit`), keeping the teacher's own shape, place and size: this is
+ * what the learner is compared with and guided by.
+ */
+export function fitReference(ref: Reference, body: Proportions): Reference {
+  const poses = ref.teacher.map((p) => retarget(p, ref.teacherBody, body, ref.posture))
+  return { ...ref, ...shapeOf(poses, ref.fps, ref.posture), body }
+}
+
+function shapeOf(poses: Pose[], fps: number, posture: Posture) {
   const feats = poses.map((p) => computeFeatures(p, posture))
   const n = feats.length
   const k = Math.max(1, Math.round(LOOKAHEAD_SEC * fps))
@@ -33,7 +57,7 @@ export function buildReference(
     const j = Math.min(n - 1, i + k)
     motion[i] = j === i ? 0 : (distance(feats[i], feats[j]) * fps) / (j - i)
   }
-  return { name, fps, aspect, posture, poses, feats, motion }
+  return { poses, feats, motion }
 }
 
 export interface FollowerOptions {

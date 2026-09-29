@@ -225,7 +225,7 @@ export class Replayer {
 
 // MediaPipe landmark indices of each joint, as the selfie view sees them:
 // with the image mirrored, the screen-left joint is the anatomical left.
-const INDEX: Record<Joint, number> = {
+const INDEX: Record<Exclude<Joint, 'lPalm' | 'rPalm'>, number> = {
   head: 0,
   lShoulder: 11,
   rShoulder: 12,
@@ -251,6 +251,15 @@ export function landmarksFromPose(pose: Pose, aspect: number): RawLandmark[] {
   for (const [j, i] of Object.entries(INDEX) as [Joint, number][]) {
     const p = pose[j]
     lm[i] = { x: 1 - p.x / aspect, y: p.y, z: 0, visibility: p.v }
+  }
+  // The palm is read back as the middle of the wrist and the index and pinky
+  // knuckles (`palmCentre`): both knuckles go where that middle is the palm.
+  for (const [side, index, pinky] of [['l', 19, 17], ['r', 20, 18]] as const) {
+    const w = pose[`${side}Wrist`]
+    const p = pose[`${side}Palm`]
+    const k = { x: 1 - (3 * p.x - w.x) / 2 / aspect, y: (3 * p.y - w.y) / 2, z: 0, visibility: p.v }
+    lm[index] = k
+    lm[pinky] = { ...k }
   }
   return lm
 }

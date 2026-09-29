@@ -1,5 +1,16 @@
 import type { Reference } from '../follower'
-import { bodyScale, jointOf, segmentCounts, SEGMENTS, toPx, type Pose, type Posture, type Pt, type View } from '../skeleton'
+import {
+  bodyScale,
+  jointOf,
+  JOINTS,
+  segmentCounts,
+  SEGMENTS,
+  toPx,
+  type Pose,
+  type Posture,
+  type Pt,
+  type View,
+} from '../skeleton'
 
 // Each hand has its own light: warm for the screen-left hand, cool for the
 // screen-right. Both are near white at the core, so they read over every
@@ -34,30 +45,42 @@ export function matchOf(err: number, threshold: number): number {
   return 1 - smoothstep(u)
 }
 
-/** The teacher's wrists at fractional frame `i`, between the frames either side. */
-export function wristsAt(ref: Reference, i: number, place: (p: Pt) => Pt): { l: Pt; r: Pt } {
+/** The teacher's pose (as fitted to the learner, `ref.poses`) at fractional frame `i`, between the frames either side. */
+export function poseBetween(ref: Reference, i: number): Pose {
   const n = ref.poses.length - 1
   const c = Math.min(n, Math.max(0, i))
   const a = Math.floor(c)
   const t = c - a
   const p = ref.poses[a]
+  if (!t) return p
   const q = ref.poses[Math.min(n, a + 1)]
-  const lerp = (u: Pt, v: Pt): Pt => (t ? { x: u.x + (v.x - u.x) * t, y: u.y + (v.y - u.y) * t, v: u.v + (v.v - u.v) * t } : u)
-  return { l: place(lerp(p.lWrist, q.lWrist)), r: place(lerp(p.rWrist, q.rWrist)) }
+  const out = {} as Pose
+  for (const j of JOINTS) {
+    const u = p[j]
+    const v = q[j]
+    out[j] = { x: u.x + (v.x - u.x) * t, y: u.y + (v.y - u.y) * t, v: u.v + (v.v - u.v) * t }
+  }
+  return out
+}
+
+/** The teacher's palms at fractional frame `i`, laid by `place` on the learner (`fitOnto`). */
+export function palmsAt(ref: Reference, i: number, place: (p: Pose) => Pose): { l: Pt; r: Pt } {
+  const p = place(poseBetween(ref, i))
+  return { l: p.lPalm, r: p.rPalm }
 }
 
 /**
- * Where each hand goes over the next `secs` of the move from frame `from`
- * (fractional), moved by `place` onto the learner's body. Sampled 20 times a
+ * Where each palm goes over the next `secs` of the move from frame `from`
+ * (fractional), laid by `place` on the learner's body. Sampled 20 times a
  * second, always ending exactly where the stretch ends.
  */
-export function handPath(ref: Reference, from: number, secs: number, place: (p: Pt) => Pt): { l: Pt[]; r: Pt[] } {
+export function handPath(ref: Reference, from: number, secs: number, place: (p: Pose) => Pose): { l: Pt[]; r: Pt[] } {
   const last = Math.min(ref.poses.length - 1, from + Math.max(0, secs) * ref.fps)
   const stepBy = ref.fps / 20
   const l: Pt[] = []
   const r: Pt[] = []
   const add = (i: number) => {
-    const w = wristsAt(ref, i, place)
+    const w = palmsAt(ref, i, place)
     l.push(w.l)
     r.push(w.r)
   }
@@ -119,6 +142,18 @@ export function nearness(hand: Pt, way: Pt[], body: number): number {
   return 1 - smoothstep(clamp01((d / body - 0.3) / 0.6))
 }
 
+/**
+ * Whether any of `points` (image units) falls outside what a `view` of a
+ * `w`×`h` box shows, or within `margin` (pixels) of its edge: a bead or path
+ * there can't be reached in the picture, so the learner is asked to step back.
+ */
+export function outOfView(points: Pt[], view: View, w: number, h: number, margin: number): boolean {
+  return points.some((p) => {
+    const [x, y] = toPx(view, p)
+    return x < margin || x > w - margin || y < margin || y > h - margin
+  })
+}
+
 /** Whether a hand is locked on to its bead, with some give so it doesn't flicker at the edge. */
 export const lockOn = (locked: boolean, near: number) => (locked ? near > 0.4 : near > 0.75)
 
@@ -151,7 +186,7 @@ export interface GuidanceFrame {
   view: View
   /** Device pixels per CSS pixel, for line widths. */
   dpr: number
-  /** The teacher where the beads are, aligned to the learner's body: drawn as a faint outline. */
+  /** The teacher where the beads are, fitted to the learner's body and laid on it: drawn as a faint outline. */
   shape: Pose
   /** The learner, or null when no one is seen. */
   learner: Pose | null
@@ -232,9 +267,9 @@ export class Guidance {
       const hand = this.hands[side]
       const to = f.bead[side]
       hand.bead = hand.bead ? { x: hand.bead.x + (to.x - hand.bead.x) * glide, y: hand.bead.y + (to.y - hand.bead.y) * glide, v: to.v } : to
-      const wrist = f.learner?.[side === 'l' ? 'lWrist' : 'rWrist']
+      const palm = f.learner?.[side === 'l' ? 'lPalm' : 'rPalm']
       hand.near =
-        wrist && wrist.v >= 0.35 ? nearness(wrist, [...f.behind[side], hand.bead], bodyScale(f.learner!, f.posture)) : 0
+        palm && palm.v >= 0.35 ? nearness(palm, [...f.behind[side], hand.bead], bodyScale(f.learner!, f.posture)) : 0
       hand.locked = lockOn(hand.locked, hand.near)
       hand.lock += ((hand.locked ? 1 : 0) - hand.lock) * settle
     }
@@ -346,11 +381,11 @@ export class Guidance {
 
   /** The learner's own hand as a ring: filled and glowing when on its bead, tethered to it when off. */
   private drawHand(ctx: CanvasRenderingContext2D, f: GuidanceFrame, side: Side, T: number, u: number) {
-    const wrist = f.learner?.[side === 'l' ? 'lWrist' : 'rWrist']
+    const palm = f.learner?.[side === 'l' ? 'lPalm' : 'rPalm']
     const hand = this.hands[side]
-    if (!wrist || wrist.v < 0.35 || !hand.bead) return
+    if (!palm || palm.v < 0.35 || !hand.bead) return
     const tint = TINTS[side]
-    const [x, y] = toPx(f.view, wrist)
+    const [x, y] = toPx(f.view, palm)
     const { ring: R, bead: beadR } = sizes(T, u)
     const a = f.presence
     const lock = hand.lock

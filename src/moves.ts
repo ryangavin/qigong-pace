@@ -1,3 +1,4 @@
+import { inPosture, type Proportions } from './fit'
 import { buildReference, type Reference } from './follower'
 import type { Pose, Posture, Pt } from './skeleton'
 
@@ -423,17 +424,34 @@ export const DEMO_MOVES: Move[] = [
   },
 ]
 
-// Body proportions in torso lengths.
+// Body proportions in torso lengths. They are the figure's own, drawn for
+// clarity (long arms read well); the learner is never compared with them
+// directly, since the figure is refitted to the learner's own body (fit.ts).
 const BODY = {
   torso: 0.19,
   shoulderHalf: 0.42,
   hipHalf: 0.22,
   upperArm: 0.72,
   forearm: 0.66,
+  /** Wrist to the centre of the palm, straight on from the forearm. */
+  hand: 0.15,
   thigh: 0.95,
   shin: 0.95,
   head: 0.55,
   stanceHalf: 0.34,
+}
+
+/** The figure's proportions, as the fitting measures bodies (torso lengths, standing). */
+export const FIGURE_BODY: Proportions = {
+  upperArm: BODY.upperArm,
+  forearm: BODY.forearm,
+  hand: BODY.hand,
+  shoulders: 2 * BODY.shoulderHalf,
+  hips: 2 * BODY.hipHalf,
+  torso: 1,
+  neck: BODY.head,
+  thigh: Math.hypot(BODY.thigh, (BODY.stanceHalf - BODY.hipHalf) / 2),
+  shin: Math.hypot(BODY.shin, (BODY.stanceHalf - BODY.hipHalf) / 2),
 }
 
 export const DEMO_ASPECT = 4 / 3
@@ -491,7 +509,9 @@ export function poseAt(k: BodyKey, posture: Posture = 'standing'): Pose {
     const ey = shoulderY + Math.cos(upper) * BODY.upperArm * T
     const wx = ex + side * Math.sin(fore) * BODY.forearm * T
     const wy = ey + Math.cos(fore) * BODY.forearm * T
-    return [p(sx, shoulderY), p(ex, ey), p(wx, wy)] as const
+    const px = wx + side * Math.sin(fore) * BODY.hand * T
+    const py = wy + Math.cos(fore) * BODY.hand * T
+    return [p(sx, shoulderY), p(ex, ey), p(wx, wy), p(px, py)] as const
   }
   const leg = (side: -1 | 1) => {
     const hx = cx + side * BODY.hipHalf * T
@@ -501,8 +521,8 @@ export function poseAt(k: BodyKey, posture: Posture = 'standing'): Pose {
     const ky = hipY + thighDrop * T
     return [p(hx, hipY), p(kx, ky), p(ax, GROUND)] as const
   }
-  const [lShoulder, lElbow, lWrist] = arm(-1, k.lArm, k.lElbow)
-  const [rShoulder, rElbow, rWrist] = arm(1, k.rArm, k.rElbow)
+  const [lShoulder, lElbow, lWrist, lPalm] = arm(-1, k.lArm, k.lElbow)
+  const [rShoulder, rElbow, rWrist, rPalm] = arm(1, k.rArm, k.rElbow)
   const [lHip, lKnee, lAnkle] = leg(-1)
   const [rHip, rKnee, rAnkle] = leg(1)
   return {
@@ -513,6 +533,8 @@ export function poseAt(k: BodyKey, posture: Posture = 'standing'): Pose {
     rElbow,
     lWrist,
     rWrist,
+    lPalm,
+    rPalm,
     lHip,
     rHip,
     lKnee,
@@ -528,5 +550,5 @@ export function referenceFromMove(move: Move, posture: Posture = 'standing'): Re
   const end = move.keys[move.keys.length - 1].t
   const poses: Pose[] = []
   for (let i = 0; i <= Math.round(end * DEMO_FPS); i++) poses.push(poseAt(sample(move.keys, i / DEMO_FPS), posture))
-  return buildReference(move.name, DEMO_FPS, DEMO_ASPECT, poses, posture)
+  return buildReference(move.name, DEMO_FPS, DEMO_ASPECT, poses, posture, inPosture(FIGURE_BODY, posture))
 }
