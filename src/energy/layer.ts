@@ -1,8 +1,9 @@
+import { QI_REGIONS, quietFrame, type QiFrame } from '../qi'
 import type { Pose } from '../skeleton'
 import { bodyGeometry, emptyGeometry } from './body'
 import { PALETTES, type Palette, type PaletteName } from './palettes'
 import { COMPOSITE, COPY, DOWN, SIM, UP, VERT } from './shaders'
-import { QI_REGIONS, quietFrame, type EnergyView, type QiFrame } from './types'
+import type { EnergyView } from './types'
 
 // The qi energy layer: a sea of luminous dye carried by a flow field and fed
 // by the body, drawn over the camera with `mix-blend-mode: screen` (black
@@ -11,6 +12,18 @@ import { QI_REGIONS, quietFrame, type EnergyView, type QiFrame } from './types'
 // Each frame: one simulation pass at reduced resolution (advect, fade,
 // inject), a dual-filter bloom chain, then a full-resolution composite that
 // colours it with the palette.
+//
+// If the browser takes the WebGL context away (a GPU reset, too many
+// contexts), the layer stops drawing, and rebuilds itself when the context is
+// restored. A lost canvas is blank, and screened blank adds nothing, so the
+// view carries on without the energy rather than going black.
+
+/** A single-channel mask, one byte per pixel, rows from the top. */
+export interface MaskData {
+  data: Uint8Array
+  width: number
+  height: number
+}
 
 export interface EnergyLayerOptions {
   palette?: PaletteName | Palette
@@ -19,6 +32,8 @@ export interface EnergyLayerOptions {
   maxSimHeight?: number
   /** Cap on device pixels per CSS pixel for the canvas; the light is soft, so 1 is plenty. */
   maxPixelRatio?: number
+  /** Overall strength of the light, 0..1: the final colour is scaled by it. 1 (the default) is the look as tuned. */
+  strength?: number
 }
 
 export interface EnergyLayer {
@@ -31,10 +46,13 @@ export interface EnergyLayer {
   resize(): void
   setPalette(palette: PaletteName | Palette): void
   /**
-   * A person segmentation mask (red channel 0..1) in the same image and
-   * orientation as the pose, adding to the body's silhouette. Null removes it.
+   * A person segmentation mask (red channel 0..1, or bytes 0..255) in the same
+   * image and orientation as the pose, adding to the body's silhouette. It may
+   * be smaller than the image; it is stretched over it. Null removes it.
    */
-  setMask(mask: TexImageSource | null): void
+  setMask(mask: TexImageSource | MaskData | null): void
+  /** False while the WebGL context is lost; the canvas is blank until it's back. */
+  readonly live: boolean
   dispose(): void
 }
 
@@ -57,22 +75,51 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
     powerPreference: 'high-performance',
   })
   if (!gl) throw new Error('WebGL2 is not available')
-  // Half-float targets keep the long faint tails; without them, 8 bits will do.
-  const floatTargets = !!gl.getExtension('EXT_color_buffer_float')
   const simScale = opts.simScale ?? 0.5
   const maxSimHeight = opts.maxSimHeight ?? 540
   const maxPixelRatio = opts.maxPixelRatio ?? 1
+  const strength = Math.min(1, Math.max(0, opts.strength ?? 1))
 
-  const vao = gl.createVertexArray()
-  gl.bindVertexArray(vao)
-
-  const programs = {
-    sim: program(gl, SIM),
-    copy: program(gl, COPY),
-    down: program(gl, DOWN),
-    up: program(gl, UP),
-    composite: program(gl, COMPOSITE),
+  // Everything the context owns; made again when a lost context comes back.
+  let floatTargets = false
+  let vao: WebGLVertexArrayObject | null = null
+  let programs: Record<'sim' | 'copy' | 'down' | 'up' | 'composite', Program>
+  function build() {
+    // Half-float targets keep the long faint tails; without them, 8 bits will do.
+    floatTargets = !!gl!.getExtension('EXT_color_buffer_float')
+    vao = gl!.createVertexArray()
+    gl!.bindVertexArray(vao)
+    programs = {
+      sim: program(gl!, SIM),
+      copy: program(gl!, COPY),
+      down: program(gl!, DOWN),
+      up: program(gl!, UP),
+      composite: program(gl!, COMPOSITE),
+    }
+    dye = null
+    bloom = []
+    mask = null
+    maskOn = false
   }
+
+  let lost = false
+  const onLost = (e: Event) => {
+    // Without preventDefault the browser never offers the context back.
+    e.preventDefault()
+    lost = true
+  }
+  const onRestored = () => {
+    try {
+      build()
+      lost = false
+      resize()
+    } catch (err) {
+      // Stay blank rather than half-drawn.
+      console.warn('Energy layer could not be restored', err)
+    }
+  }
+  canvas.addEventListener('webglcontextlost', onLost)
+  canvas.addEventListener('webglcontextrestored', onRestored)
 
   let palette: Palette = resolvePalette(opts.palette ?? 'dusk')
   let dye: [Target, Target] | null = null
@@ -142,7 +189,7 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
       canvas.width = w
       canvas.height = h
     }
-    allocate()
+    if (!lost) allocate()
   }
 
   function draw(t: Target | null) {
@@ -157,6 +204,7 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
   }
 
   function render(frame: QiFrame, pose: Pose | null, view: EnergyView, dtIn: number) {
+    if (lost || gl!.isContextLost()) return
     if (!dye) resize()
     const dt = Math.min(Math.max(dtIn, 0), 1 / 20)
     const k = 1 - Math.exp(-dt / 0.2)
@@ -255,12 +303,13 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
     gl!.uniform3fv(c.loc('uSeaLight'), palette.seaLight)
     gl!.uniform3fv(c.loc('uBody'), palette.body)
     gl!.uniform3fv(c.loc('uCore'), palette.core)
+    c.f('uStrength', strength)
     draw(null)
   }
 
-  function setMask(source: TexImageSource | null) {
+  function setMask(source: TexImageSource | MaskData | null) {
     maskOn = !!source
-    if (!source) return
+    if (!source || lost) return
     if (!mask) {
       mask = gl!.createTexture()!
       gl!.bindTexture(gl!.TEXTURE_2D, mask)
@@ -270,10 +319,19 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
       gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE)
     }
     gl!.bindTexture(gl!.TEXTURE_2D, mask)
-    gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA, gl!.RGBA, gl!.UNSIGNED_BYTE, source)
+    if ('data' in source && source.data instanceof Uint8Array) {
+      // Rows of single bytes aren't 4-aligned in general.
+      gl!.pixelStorei(gl!.UNPACK_ALIGNMENT, 1)
+      gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.R8, source.width, source.height, 0, gl!.RED, gl!.UNSIGNED_BYTE, source.data)
+      gl!.pixelStorei(gl!.UNPACK_ALIGNMENT, 4)
+    } else {
+      gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA, gl!.RGBA, gl!.UNSIGNED_BYTE, source as TexImageSource)
+    }
   }
 
   function dispose() {
+    canvas.removeEventListener('webglcontextlost', onLost)
+    canvas.removeEventListener('webglcontextrestored', onRestored)
     dye?.forEach(free)
     bloom.forEach(free)
     dye = null
@@ -283,6 +341,7 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
     gl!.deleteVertexArray(vao)
   }
 
+  build()
   resize()
   return {
     render,
@@ -291,9 +350,14 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
       palette = resolvePalette(p)
     },
     setMask,
+    get live() {
+      return !lost
+    },
     dispose,
   }
 }
+
+type Program = ReturnType<typeof program>
 
 function resolvePalette(p: PaletteName | Palette): Palette {
   return typeof p === 'string' ? PALETTES[p] : p

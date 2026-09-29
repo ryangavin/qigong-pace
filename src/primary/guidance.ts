@@ -56,6 +56,11 @@ export interface GuidanceFrame {
   trail: { l: Pt[]; r: Pt[] }
   /** Overall strength of the ghost, 0..1: it fades in when someone is seen. */
   presence: number
+  /**
+   * The session's qi, 0..1. As it builds the ghost's body grows subtler and
+   * lets the energy carry the feeling; the hands and their way ahead stay clear.
+   */
+  qi: number
   dt: number
   /** Seconds, for the breathing. */
   time: number
@@ -84,6 +89,7 @@ export class Guidance {
   private motes: Mote[] = []
   private halo = document.createElement('canvas')
   private core = document.createElement('canvas')
+  private shadeSmall = document.createElement('canvas')
   private sprite = makeSprite()
   private seed = 7
 
@@ -99,7 +105,7 @@ export class Guidance {
    * below, so black leaves it untouched and overlapping limbs never pile up
    * into bright knots at the joints.
    */
-  draw(ctx: CanvasRenderingContext2D, f: GuidanceFrame) {
+  draw(ctx: CanvasRenderingContext2D, f: GuidanceFrame, shade?: CanvasRenderingContext2D) {
     const { width: w, height: h } = ctx.canvas
     ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, w, h)
@@ -110,15 +116,22 @@ export class Guidance {
     const breath = calm ? 0.9 : 0.82 + 0.18 * Math.sin((f.time * 2 * Math.PI) / 6.5)
     const body = this.fuse(f)
     const a = breath * f.presence
+    // With qi gathered the energy fills the body, so the ghost's own body
+    // steps back (its wide halo most), while the hands and the trails, the
+    // way ahead, keep their light and sharpen a little.
+    const qi = Math.min(1, Math.max(0, f.qi))
+    const bodyHalo = 1 - 0.7 * qi
+    const bodyCore = 1 - 0.35 * qi
+    const lead = 1 + 0.25 * qi
 
     // The body is drawn small and scaled up: the upscale softens it, and one
     // blur per layer is far cheaper than blurring every limb.
     const halo = this.layer(this.halo, w, h, 0.25)
     const core = this.layer(this.core, w, h, 0.5)
-    this.paintBody(halo, f, body, T * 0.5, a * 0.28, HALO)
+    this.paintBody(halo, f, body, T * 0.5, a * 0.28 * bodyHalo, HALO)
     this.paintTrail(halo, f, T * 0.16, a * 0.6)
-    this.paintBody(core, f, body, T * 0.1, a * 0.32, CORE)
-    this.paintTrail(core, f, T * 0.05, a * 0.7)
+    this.paintBody(core, f, body, T * 0.1, a * 0.32 * bodyCore, CORE)
+    this.paintTrail(core, f, T * 0.05, a * 0.7 * lead)
 
     ctx.save()
     ctx.globalCompositeOperation = 'lighter'
@@ -131,9 +144,57 @@ export class Guidance {
     for (const j of ['lWrist', 'rWrist'] as const) {
       const [x, y] = toPx(f.view, body[j])
       this.glow(ctx, x, y, T * 0.26, 0.45 * a)
-      this.glow(ctx, x, y, T * 0.08, 0.8 * a)
+      this.glow(ctx, x, y, T * 0.08, 0.8 * a * lead)
     }
     if (!calm) this.drawMotes(ctx, f, body, T)
+    ctx.restore()
+    if (shade) this.paintShade(shade, f, body, T, qi)
+  }
+
+  /**
+   * A soft dusk under the hands and their way ahead, drawn on a canvas that
+   * sits between the energy and the ghost and is not screened: where the
+   * energy burns brightest it is dimmed a little there, so the guide still
+   * reads against it. Only as strong as the gathered qi calls for.
+   */
+  private paintShade(ctx: CanvasRenderingContext2D, f: GuidanceFrame, body: Pose, T: number, qi: number) {
+    const { width: w, height: h } = ctx.canvas
+    ctx.clearRect(0, 0, w, h)
+    const strength = 0.5 * smoothstep(Math.min(1, qi / 0.6)) * f.presence
+    if (strength < 0.01) return
+    const k = 0.25
+    const small = this.shadeSmall
+    const cw = Math.max(1, Math.round(w * k))
+    const ch = Math.max(1, Math.round(h * k))
+    if (small.width !== cw || small.height !== ch) {
+      small.width = cw
+      small.height = ch
+    }
+    const s = small.getContext('2d')!
+    s.setTransform(1, 0, 0, 1, 0, 0)
+    s.clearRect(0, 0, cw, ch)
+    s.setTransform(k, 0, 0, k, 0, 0)
+    // Opaque here, faded as a whole below, so overlaps never pile up darker.
+    s.strokeStyle = s.fillStyle = '#030408'
+    s.lineCap = 'round'
+    s.lineJoin = 'round'
+    s.lineWidth = T * 0.3
+    for (const path of [f.trail.l, f.trail.r]) {
+      if (path.length < 2) continue
+      s.beginPath()
+      for (const p of path) s.lineTo(...toPx(f.view, p))
+      s.stroke()
+    }
+    for (const j of ['lWrist', 'rWrist'] as const) {
+      const [x, y] = toPx(f.view, body[j])
+      s.beginPath()
+      s.arc(x, y, T * 0.28, 0, Math.PI * 2)
+      s.fill()
+    }
+    ctx.save()
+    ctx.globalAlpha = strength
+    ctx.filter = `blur(${Math.round(T * 0.14)}px)`
+    ctx.drawImage(small, 0, 0, w, h)
     ctx.restore()
   }
 

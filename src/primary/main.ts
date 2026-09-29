@@ -1,7 +1,9 @@
+import { createEnergyLayer, PALETTE_NAMES, type EnergyLayer, type PaletteName } from '../energy'
 import { Follower, type Reference } from '../follower'
 import { DEMO_MOVES, MOVE_SETS, referenceFromMove, type Move } from '../moves'
 import { PoseTracker } from '../pose'
 import { loadPosture, savePosture } from '../prefs'
+import { QiModel } from '../qi'
 import { SimStudent } from '../sim'
 import {
   alignment,
@@ -21,8 +23,10 @@ import {
   type Pt,
 } from '../skeleton'
 import { Guidance, handPath } from './guidance'
+import { Invitations } from './invitations'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
+const params = new URLSearchParams(location.search)
 
 /** How far ahead of the learner the ghost moves, in seconds of the move. */
 const LEAD_SEC = 0.5
@@ -92,7 +96,7 @@ let user: { pose: Pose; feats: Features; aspect: number } | null = null
 let calm: Pose | null = null
 
 // ?sim drives the view with a simulated student; ?sim=0.6 sets its speed.
-const simParam = new URLSearchParams(location.search).get('sim')
+const simParam = params.get('sim')
 const sim = new SimStudent({ speed: Number(simParam) || 0.5, wander: 0.9 })
 
 async function startCamera() {
@@ -107,7 +111,8 @@ async function startCamera() {
     })
     cam.srcObject = stream
     await cam.play()
-    tracker ??= await PoseTracker.create()
+    // The mask lies like the mirrored pose, for the energy layer's silhouette.
+    tracker ??= await PoseTracker.create({ segmentation: !!energy, flipX: true })
     begin('camera')
   } catch (e) {
     err.textContent = e instanceof Error ? e.message : String(e)
@@ -130,6 +135,7 @@ function begin(s: Source) {
   cam.hidden = s !== 'camera'
   $('useCamera').hidden = s !== 'sim'
   $('again').hidden = false
+  energy?.setMask(null)
   wake()
 }
 
@@ -138,6 +144,7 @@ function readLearner(dt: number) {
     if (cam.currentTime === lastCamTime) return
     lastCamTime = cam.currentTime
     const lm = tracker.detect(cam, performance.now())
+    energy?.setMask(tracker.mask)
     const aspect = cam.videoWidth / cam.videoHeight
     if (!lm) {
       user = null
@@ -149,6 +156,44 @@ function readLearner(dt: number) {
     const pose = sim.step(follower, dt)
     user = { pose, feats: computeFeatures(pose, ref.posture), aspect: ref.aspect }
   }
+}
+
+// ---- Qi --------------------------------------------------------------------
+
+// One session's qi, kept across moves, postures and beginning again.
+const qi = new QiModel()
+// ?qi=0.7 starts the session with that much gathered: a dev aid for looking
+// at the view at higher qi without practising for minutes first.
+if (params.has('qi')) qi.frame.level = Math.min(1, Math.max(0, Number(params.get('qi')) || 0))
+
+// ?palette=jade (or dusk, the default, or ember) colours the energy.
+const paletteParam = params.get('palette') as PaletteName
+const palette: PaletteName = PALETTE_NAMES.includes(paletteParam) ? paletteParam : 'dusk'
+
+/**
+ * How strongly the qi energy shows in the primary view, 0..1 (1 is the energy
+ * layer as tuned on energy.html). Kept modest so the guidance reads first and
+ * the energy stays in the background of learning; raise it to let the energy
+ * carry more of the view.
+ */
+export const energyStrength = 0.5
+
+/** The energy layer, or null where WebGL2 isn't available: the view works without it. */
+let energy: EnergyLayer | null = null
+try {
+  energy = createEnergyLayer($<HTMLCanvasElement>('energy'), { palette, strength: energyStrength })
+} catch (e) {
+  console.warn('No energy layer:', e)
+  $('energy').hidden = true
+}
+window.addEventListener('resize', () => energy?.resize())
+
+function drawEnergy(dt: number) {
+  if (!energy) return
+  const c = $<HTMLCanvasElement>('energy')
+  const aspect = aspectNow()
+  const view = { ...coverView(c.clientWidth, c.clientHeight, aspect), aspect }
+  energy.render(qi.frame, calm, view, dt)
 }
 
 function easeLearner(dt: number) {
@@ -238,6 +283,9 @@ function drawGuidance(dt: number, time: number) {
   const c = $<HTMLCanvasElement>('guidance')
   const { w, h } = fitCanvas(c)
   const ctx = c.getContext('2d')!
+  const shadeCanvas = $<HTMLCanvasElement>('shade')
+  fitCanvas(shadeCanvas)
+  const shade = shadeCanvas.getContext('2d')!
   const shown = follower.state === 'waiting' ? 0 : follower.displayFrame(LEAD_SEC)
   const teacher = ref.poses[Math.round(shown)]
   // The ghost stays where it was last laid while no one is seen, and fades.
@@ -249,6 +297,7 @@ function drawGuidance(dt: number, time: number) {
   presence += (target - presence) * (1 - Math.exp(-dt / 0.8))
   if (!ghost || !ghostPlace) {
     ctx.clearRect(0, 0, w, h)
+    shade.clearRect(0, 0, w, h)
     return
   }
   if (user) {
@@ -264,9 +313,11 @@ function drawGuidance(dt: number, time: number) {
     posture: ref.posture,
     trail: moving ? handPath(ref, shown, TRAIL_SEC, ghostPlace) : { l: [], r: [] },
     presence,
+    // Without the energy (no WebGL2, or its context lost) the ghost stays whole and needs no shade.
+    qi: energy?.live ? qi.frame.level : 0,
     dt,
     time,
-  })
+  }, shade)
 }
 
 // ---- Words -----------------------------------------------------------------
@@ -274,20 +325,27 @@ function drawGuidance(dt: number, time: number) {
 let cueUntil = -1
 let lineText = ''
 let lineTimer = 0
+const invitations = new Invitations()
 
-/** Crossfade the one line of words at the bottom to `text`. */
-function say(text: string) {
+/**
+ * Crossfade the one line of words at the bottom to `text`. An invitation
+ * fades in and out more slowly than the move's words; the old words are
+ * always gone before the new ones come, so the two never overlap.
+ */
+function say(text: string, invite = false) {
   if (text === lineText) return
   lineText = text
   const el = $('line')
+  const fadeOut = el.classList.contains('invite') ? 2000 : 700
   el.classList.remove('shown')
   clearTimeout(lineTimer)
   lineTimer = window.setTimeout(
     () => {
       el.textContent = text
+      el.classList.toggle('invite', invite)
       if (text) el.classList.add('shown')
     },
-    el.textContent ? 700 : 0,
+    el.textContent ? fadeOut : 0,
   )
 }
 
@@ -359,9 +417,23 @@ function frame(now: number) {
   readLearner(dt)
   easeLearner(dt)
   follower.update(user?.feats ?? null, dt)
+  if (source !== 'none') qi.update({ follower, pose: user?.pose ?? null, dt })
   if (source === 'sim') drawBackdrop()
+  if (source !== 'none') drawEnergy(dt)
   drawGuidance(dt, now / 1000)
-  say(lineFor(now))
+  // The move's own words come first; an invitation only ever fills a quiet line.
+  const line = lineFor(now)
+  const invite = invitations.update({
+    q: qi.frame,
+    dt,
+    practising: !!user && follower.state === 'following' && !follower.lost,
+    inHold: follower.inHold,
+    // Only once the move itself is known: after one whole repetition of it.
+    repeated: follower.reps >= 1,
+    standing: ref.posture === 'standing',
+    busy: line !== '',
+  })
+  say(line || invite?.text || '', !line && !!invite)
   updateProgress()
   // At the end the chrome comes back to offer another round.
   if (follower.state === 'done') document.body.classList.remove('still')

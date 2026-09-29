@@ -158,6 +158,16 @@ cue; the model value that carries it.
   position, so it follows the learner's pace. Long holds breathe on their own
   in a slow 8-second cycle.
 
+## Invitations in the primary view
+
+The cues above are offered as invitations (`src/primary/invitations.ts`) when
+the model shows the matching state: a strong `palmField`, a charged dantian in
+a sustained hold, charged feet while the breath sinks, a charged crown while it
+rises, a current along an arm, warm palms, and a high `level`. They wait until
+the learner has done the move through once and practised for half a minute,
+show one at a time, offer each at most once every four minutes, and never share
+the line with the move's own words.
+
 ## The model's dynamics
 
 `QiModel.update({ follower, pose, dt })` once per frame; it returns a `QiFrame`.

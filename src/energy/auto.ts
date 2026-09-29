@@ -1,5 +1,5 @@
 import { torsoLength, type Pose } from '../skeleton'
-import type { QiFrame } from './types'
+import type { QiFrame } from '../qi'
 
 // A stand-in for the qi model, for the tuning harness: a rough QiFrame read
 // off the body's motion. Opening and rising reads as the in-breath, reaching

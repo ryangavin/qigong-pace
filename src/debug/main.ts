@@ -3,6 +3,7 @@ import { analyzeVideo, type VideoTeacher } from '../extract'
 import { DEMO_MOVES, MOVE_SETS, referenceFromMove } from '../moves'
 import { PoseTracker } from '../pose'
 import { loadPosture, savePosture } from '../prefs'
+import { QI_REGIONS, QiModel } from '../qi'
 import { SimStudent } from '../sim'
 import {
   alignPoseTo,
@@ -399,6 +400,26 @@ function updateReadout() {
     f.state === 'following' ? `${secs}s of ${total}s · your pace ${f.pace.toFixed(2)}×` : `${secs}s of ${total}s`
 }
 
+// ---- Qi ----------------------------------------------------------------------
+
+// The session's qi, as the primary view's energy layer would be fed it.
+const qi = new QiModel()
+let qiShownAt = 0
+
+/** A compact readout of the live QiFrame, refreshed a few times a second so it can be read. */
+function updateQiReadout() {
+  const now = performance.now()
+  if (now - qiShownAt < 150) return
+  qiShownAt = now
+  const q = qi.frame
+  const n = (v: number) => v.toFixed(2)
+  const s = (v: number) => (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2)
+  const regions = QI_REGIONS.map((r) => `${r} ${n(q.regions[r])}`).join('  ')
+  $('qi').textContent =
+    `qi ${n(q.level)}  breath ${s(q.breath)}  flow ${n(q.flow)}  palmField ${n(q.palmField)}  ` +
+    `armFlow ${s(q.armFlow.l)} / ${s(q.armFlow.r)}\n${regions}`
+}
+
 // ---- Loop --------------------------------------------------------------------
 
 let lastT = performance.now()
@@ -407,6 +428,8 @@ function frame(now: number) {
   lastT = now
   readLearner(dt)
   follower.update(user?.feats ?? null, dt)
+  if (source !== 'none') qi.update({ follower, pose: user?.pose ?? null, dt })
+  updateQiReadout()
   const lead = Number($<HTMLInputElement>('lead').value)
   drawTeacher(lead)
   drawYou()
