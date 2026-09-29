@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Learn qi gong moves with a teacher that moves exactly at your pace, driven by webcam pose tracking.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
