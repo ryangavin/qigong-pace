@@ -18,6 +18,8 @@ through the webcam, matches its pose.
   A reference keeps the teacher's own poses (`teacher`, `teacherBody`); `fitReference` gives the same move fitted
   to a learner's body (`poses`, `feats`), which is what the learner is compared with and guided by. The views
   refit it as the learner's `BodyFit` moves on and swap it into the running `Follower`.
+  Holds run at real time while the learner holds the shape; a learner held still in the shape (`stir`, `settled`)
+  just short of a hold is carried into it and through it, even when their shape is a little off the teacher's.
 - `src/moves.ts`: built-in moves as keyframes, and the figure drawn from them. Each `Move` lists the `postures` it supports.
   Keys are transcribed exactly from `docs/move-catalog.md` (the spec), one line per move.
 - `src/energy/`: the qi energy layer, a raw WebGL2 renderer drawn over the camera with `mix-blend-mode: screen`.
@@ -31,8 +33,10 @@ through the webcam, matches its pose.
   `?model=lite|full|heavy` on either page picks the pose model (`full` by default).
 - `src/smoothing.ts`: `LandmarkFilter` steadies the learner's raw MediaPipe landmarks (every one, before
   `poseFromLandmarks`) with a One Euro filter per coordinate on real timestamps; a landmark that drops below
-  visibility 0.5 holds its place briefly, then its visibility fades. Both pages filter the camera learner; imported
-  videos use `cleanTrack` instead.
+  visibility 0.5 holds its place briefly, then its visibility fades. A detection that can't be a body moving
+  (shoulder width or a well-seen torso changing by over 35% in a frame, shoulders swapping sides or leaping) is
+  passed over like a frame with no one found; three agreeing ones in a row are a real change and are taken afresh.
+  Both pages filter the camera learner; imported videos use `cleanTrack` instead.
 - `energy.html` (with `src/energy/harness.ts`): a tuning page for the energy layer, driven by a simulated student,
   with sliders, palettes and an fps / GPU-time readout. URL options are listed on the page.
 - `src/qi/`: the qi model. `QiModel` turns practice (the `Follower`, the learner's pose) into energy
@@ -64,8 +68,10 @@ through the webcam, matches its pose.
   so they read over bright energy), chrome.
   `invitations.ts` picks the gentle invitations to notice a sensation (pure, tested; texts from `docs/sensations.md`);
   they share the one line of words with the move's cues and never overlap them.
-  `tracking.ts` (pure, tested) says when the camera can't see the learner well (no one found, too close, a hand
-  unseen), only once it has lasted a moment; its hint sits up top (`#hint`), apart from the move's line.
+  `tracking.ts` (pure, tested) says when the camera can't see the learner well (no one found, too close, framed
+  too low, a hand unseen), only once it has lasted a moment; its hint sits up top (`#hint`), apart from the move's
+  line. Framing is checked against the posture: standing needs head to feet; seated needs the head and the hands
+  resting in the lap (estimated from the shoulders when unseen), and says to sit back or tilt the camera down.
   URL options: `?sim` (or `?sim=<speed>`) drives it with the simulated student over a synthetic dark room instead
   of the camera, and `?wander=<torso lengths>` (0.9 by default) sets how far its screen-right hand strays off the
   path. The simulated student is built like a typical person, not like the figure; `?arms=<torso lengths>`

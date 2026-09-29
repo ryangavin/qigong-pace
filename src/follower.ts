@@ -124,6 +124,14 @@ export type FollowState = 'waiting' | 'following' | 'done'
  * away from them by more than half of how far the teacher itself moves. Slow,
  * subtle movement also reads as a hold; there the teacher pulls away, so it
  * keeps to the learner's pace. A hold at the very end always runs on to done.
+ *
+ * A learner whose shape is steadily a little off the teacher's can match the
+ * way into a hold better than the hold, and the look-ahead can't tell that
+ * from slow movement. So it also watches how still the learner is (`stir`):
+ * once they have held the shape, still, for a second while the teacher waited
+ * just short of a hold they already have the shape of, they are `settled`, and
+ * the teacher carries on with them at real time to the hold's end, for as long
+ * as they stay still and in the shape.
  */
 export class Follower {
   state: FollowState = 'waiting'
@@ -260,15 +268,7 @@ export class Follower {
     }
   }
 
-  /**
-   * A learner whose shape is a little off the teacher's can match the way into
-   * a hold better than the hold itself, so the teacher waits at its entrance
-   * while they hold it, and the hold's look-ahead can't tell that steady
-   * offset from a slow learner. Time can: once they have held the shape,
-   * still, for a moment while the teacher waited just short of a hold they
-   * already have the shape of, they are `settled`, and the teacher carries on
-   * with them to the hold's end, for as long as they stay still and in the shape.
-   */
+  /** Whether the learner is `settled` (see the class comment), and until which frame. */
   private settle(user: Features, lo: number, dt: number) {
     const { ref, opts } = this
     const fps = ref.fps
