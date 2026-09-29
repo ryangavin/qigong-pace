@@ -24,15 +24,23 @@ through the webcam, matches its pose.
   reference implies (breath, reach, sink). The dynamics are grounded in `docs/sensations.md`, the
   research on what practitioners feel; keep the two in step.
 - `src/sim.ts`: the simulated student, for working without a webcam. `src/prefs.ts`: the remembered posture.
-- `index.html`, `src/primary/`: the primary view. The mirrored webcam full-bleed and graded dark, with the teacher
-  as a luminous ghost over the learner's own body (`guidance.ts`). Layers, back to front: camera, `#energy`
-  (the energy layer, fed by one session-long `QiModel` and the segmentation mask, screened, at `energyStrength`
-  in `main.ts`), `#shade` (dims the energy under the ghost's hands), `#guidance`, chrome.
+- `index.html`, `src/primary/`: the primary view. The mirrored webcam full-bleed and graded dark. The guidance
+  (`guidance.ts`) is something to trace: for each hand a bright path of where the teacher's wrist goes next (from
+  `follower.pos`, aligned to the learner's body; warm for the screen-left hand, cool for the right), a bead where
+  the hand should be now (the follower's lead; it stays put and fills a ring through a hold), and a ring on the
+  learner's own hand that locks on to its bead, tethered back to it when off. The teacher's shape is only a faint
+  outline. `guidanceMix(reps, flow)` (pure, tested) puts learning first: while a move is new the paths are full and
+  the energy only glimmers; as it is learned the energy grows and the paths shorten and soften. Layers, back to
+  front: camera, `#energy` (the energy layer, fed by one session-long `QiModel` and the segmentation mask,
+  screened, its strength set each frame from the mix), `#guidance` (not screened: its lines carry a dark casing
+  so they read over bright energy), chrome.
   `invitations.ts` picks the gentle invitations to notice a sensation (pure, tested; texts from `docs/sensations.md`);
   they share the one line of words with the move's cues and never overlap them.
   URL options: `?sim` (or `?sim=<speed>`) drives it with the simulated student over a synthetic dark room instead
-  of the camera; `?palette=dusk|jade|ember`; `?qi=<0..1>` starts the session with that much qi (a dev aid for
-  looking at higher qi without practising for minutes).
+  of the camera, and `?wander=<torso lengths>` (0.9 by default) sets how far its screen-right hand strays off the
+  path; `?palette=dusk|jade|ember`; `?qi=<0..1>` starts the session with that much qi and `?reps=<n>` starts each
+  move as if already practised n times smoothly (dev aids for looking at higher qi and the grown energy without
+  practising for minutes).
 - `debug.html`, `src/debug/`: the debug panel for developing the engine: teacher and learner side by side,
   timeline, pace, the live `QiFrame` readout, sliders and video import.
 - `vite.config.ts` makes every root-level `*.html` a build entry, so a new page needs no config change.
@@ -46,7 +54,8 @@ Run each once, after your last edit:
   the qi model, the simulated student, the guidance overlay's helpers, the invitations, the mask shrinking, or
   the energy layer's geometry and auto frame. Add tests for new behaviour there.
 - The energy layer's look has no automated check: open `energy.html` in the dev server (`npx vite`) and look,
-  and the primary view at `/?sim&qi=0.8` (try each `palette`). The GPU mask read-back needs a real person in
+  and the primary view at `/?sim&qi=0.8` and `/?sim&qi=0.8&reps=4` (try each `palette`; the hand paths must stay
+  legible over the energy). The GPU mask read-back needs a real person in
   front of a camera (or a photo drawn to a canvas and passed to `PoseTracker.detect`, one call per frame).
 - `npm run build` (type-check plus `vite build`): run when you touch `index.html`, CSS, imports or build config.
 

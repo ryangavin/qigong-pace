@@ -51,6 +51,8 @@ export interface EnergyLayer {
    * be smaller than the image; it is stretched over it. Null removes it.
    */
   setMask(mask: TexImageSource | MaskData | null): void
+  /** Change the overall strength (see `EnergyLayerOptions.strength`) from the next frame. */
+  setStrength(strength: number): void
   /** False while the WebGL context is lost; the canvas is blank until it's back. */
   readonly live: boolean
   dispose(): void
@@ -78,7 +80,8 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
   const simScale = opts.simScale ?? 0.5
   const maxSimHeight = opts.maxSimHeight ?? 540
   const maxPixelRatio = opts.maxPixelRatio ?? 1
-  const strength = Math.min(1, Math.max(0, opts.strength ?? 1))
+  const clampStrength = (s: number) => Math.min(1, Math.max(0, s))
+  let strength = clampStrength(opts.strength ?? 1)
 
   // Everything the context owns; made again when a lost context comes back.
   let floatTargets = false
@@ -350,6 +353,9 @@ export function createEnergyLayer(canvas: HTMLCanvasElement, opts: EnergyLayerOp
       palette = resolvePalette(p)
     },
     setMask,
+    setStrength: (s) => {
+      strength = clampStrength(s)
+    },
     get live() {
       return !lost
     },

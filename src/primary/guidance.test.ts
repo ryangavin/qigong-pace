@@ -1,9 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { Follower } from '../follower'
+import { Follower, type Reference } from '../follower'
 import { DEMO_MOVES, referenceFromMove } from '../moves'
 import { SimStudent } from '../sim'
-import { alignment, alignPoseTo, computeFeatures, coverView, JOINTS, segmentErrors, SEGMENTS } from '../skeleton'
-import { handPath, matchOf } from './guidance'
+import {
+  alignment,
+  alignPoseTo,
+  computeFeatures,
+  coverView,
+  JOINTS,
+  segmentErrors,
+  SEGMENTS,
+  torsoLength,
+} from '../skeleton'
+import {
+  beadFrame,
+  guidanceMix,
+  handPath,
+  holdAt,
+  holdProgress,
+  lockOn,
+  matchOf,
+  nearness,
+  wristsAt,
+} from './guidance'
 
 const ref = referenceFromMove(DEMO_MOVES[0])
 
@@ -45,14 +64,172 @@ describe('handPath', () => {
     expect(path.l.length).toBeLessThan(10)
   })
 
-  it('carries the path onto the learner the same way the ghost is', () => {
+  it('carries the path onto the learner the same way the teacher is', () => {
     const teacher = ref.poses[60]
     const learner = alignPoseTo(ref.poses[0], { ...ref.poses[0], lHip: { x: 0.2, y: 0.5, v: 1 } })
     const place = alignment(teacher, learner)
-    const ghost = alignPoseTo(teacher, learner)
+    const shape = alignPoseTo(teacher, learner)
     const path = handPath(ref, 60, 1, place)
-    expect(path.l[0].x).toBeCloseTo(ghost.lWrist.x)
-    expect(path.l[0].y).toBeCloseTo(ghost.lWrist.y)
+    expect(path.l[0].x).toBeCloseTo(shape.lWrist.x)
+    expect(path.l[0].y).toBeCloseTo(shape.lWrist.y)
+  })
+
+  it('starts between frames where the learner is between them', () => {
+    const path = handPath(ref, 30.5, 1, same)
+    const a = ref.poses[30].rWrist
+    const b = ref.poses[31].rWrist
+    expect(path.r[0].x).toBeCloseTo((a.x + b.x) / 2)
+    expect(path.r[0].y).toBeCloseTo((a.y + b.y) / 2)
+  })
+
+  it('ends exactly where the stretch ends, between samples too', () => {
+    const path = handPath(ref, 30, 1.05, same)
+    const end = wristsAt(ref, 30 + 1.05 * ref.fps, same)
+    expect(path.l.at(-1)!.x).toBeCloseTo(end.l.x)
+    expect(path.l.at(-1)!.y).toBeCloseTo(end.l.y)
+  })
+
+  it('keeps each hand on its own side of the screen, on a learner elsewhere and another size', () => {
+    // The frame where the hands are furthest apart.
+    let wide = 0
+    ref.poses.forEach((p, i) => {
+      const q = ref.poses[wide]
+      if (p.rWrist.x - p.lWrist.x > q.rWrist.x - q.lWrist.x) wide = i
+    })
+    const learner = { ...ref.poses[0] }
+    for (const j of JOINTS) learner[j] = { x: ref.poses[0][j].x * 0.6 + 0.9, y: ref.poses[0][j].y * 0.6 + 0.3, v: 1 }
+    const place = alignment(ref.poses[wide], learner)
+    const path = handPath(ref, wide, 0, place)
+    const mid = (learner.lHip.x + learner.rHip.x) / 2
+    expect(path.l[0].x).toBeLessThan(mid)
+    expect(path.r[0].x).toBeGreaterThan(mid)
+    // Scaled with the learner: 0.6 of the teacher's reach.
+    const reach = (p: { l: { x: number }[]; r: { x: number }[] }) => p.r[0].x - p.l[0].x
+    expect(reach(path)).toBeCloseTo(0.6 * reach(handPath(ref, wide, 0, same)))
+  })
+})
+
+// A stand-in reference for holds: moving, then still from frame 30 to 89, then
+// moving again with a brief pause at 110..114.
+const fps = 30
+const motion = Float32Array.from({ length: 150 }, (_, i) => ((i >= 30 && i < 90) || (i >= 110 && i < 115) ? 0.01 : 0.5))
+const held = { fps, motion, poses: Array.from({ length: 150 }, () => ref.poses[0]) } as unknown as Reference
+
+describe('holds', () => {
+  it('finds the whole still stretch around a frame', () => {
+    expect(holdAt(held, 45, 0.08)).toEqual({ start: 30, end: 89 })
+    expect(holdAt(held, 30, 0.08)).toEqual({ start: 30, end: 89 })
+  })
+
+  it('is no hold where the teacher moves, or only pauses', () => {
+    expect(holdAt(held, 20, 0.08)).toBeNull()
+    expect(holdAt(held, 112, 0.08)).toBeNull()
+  })
+
+  it('counts the hold through from its start to its end', () => {
+    const hold = holdAt(held, 45, 0.08)!
+    expect(holdProgress(hold, 30)).toBe(0)
+    expect(holdProgress(hold, 59.5)).toBeCloseTo(0.5)
+    expect(holdProgress(hold, 89)).toBe(1)
+    expect(holdProgress(hold, 100)).toBe(1)
+  })
+
+  it('keeps the bead a little ahead, but still until a hold ends', () => {
+    expect(beadFrame(held, 10, 0.5, null)).toBe(25)
+    const hold = holdAt(held, 80, 0.08)
+    expect(beadFrame(held, 40, 0.5, hold)).toBe(55)
+    expect(beadFrame(held, 80, 0.5, hold)).toBe(89)
+    expect(beadFrame(held, 145, 0.5, null)).toBe(149)
+  })
+})
+
+describe('lock-on', () => {
+  const way = [
+    { x: 0, y: 0, v: 1 },
+    { x: 1, y: 0, v: 1 },
+  ]
+
+  it('is whole on the way to the bead and fades off it', () => {
+    expect(nearness({ x: 0.5, y: 0.1, v: 1 }, way, 1)).toBe(1)
+    expect(nearness({ x: 1.2, y: 0, v: 1 }, way, 1)).toBe(1)
+    const a = nearness({ x: 0.5, y: 0.45, v: 1 }, way, 1)
+    const b = nearness({ x: 0.5, y: 0.7, v: 1 }, way, 1)
+    expect(a).toBeGreaterThan(b)
+    expect(b).toBeGreaterThan(0)
+    expect(nearness({ x: 0.5, y: 0.95, v: 1 }, way, 1)).toBe(0)
+  })
+
+  it('scales with the body', () => {
+    expect(nearness({ x: 0.5, y: 0.5, v: 1 }, way, 2)).toBe(1)
+  })
+
+  it('locks when near and lets go only once clearly off', () => {
+    expect(lockOn(false, 0.7)).toBe(false)
+    expect(lockOn(false, 0.8)).toBe(true)
+    expect(lockOn(true, 0.5)).toBe(true)
+    expect(lockOn(true, 0.3)).toBe(false)
+  })
+
+  it('holds a simulated student on, and lets its wandering hand go', () => {
+    const f = new Follower(ref)
+    const sim = new SimStudent({ wander: 1.5 })
+    const locked = { l: false, r: false }
+    const ever = { l: 0, r: 0 }
+    const off = { l: 0, r: 0 }
+    for (let i = 0; i < 30 * 12; i++) {
+      const pose = sim.step(f, 1 / 30)
+      f.update(computeFeatures(pose), 1 / 30)
+      if (f.state !== 'following') continue
+      const place = alignment(ref.poses[Math.round(f.pos)], pose)
+      const hold = holdAt(ref, f.pos, f.opts.holdMotion)
+      const bead = beadFrame(ref, f.pos, 0.5, hold)
+      const behind = handPath(ref, f.pos, (bead - f.pos) / ref.fps, place)
+      const at = wristsAt(ref, bead, place)
+      for (const side of ['l', 'r'] as const) {
+        const near = nearness(pose[side === 'l' ? 'lWrist' : 'rWrist'], [...behind[side], at[side]], torsoLength(pose))
+        locked[side] = lockOn(locked[side], near)
+        ever[side]++
+        if (!locked[side]) off[side]++
+      }
+    }
+    expect(ever.l).toBeGreaterThan(100)
+    expect(off.l).toBe(0)
+    expect(off.r).toBeGreaterThan(10)
+  })
+})
+
+describe('guidanceMix', () => {
+  it('shows the whole way and barely any energy while the move is new', () => {
+    for (const flow of [0, 0.5, 1]) {
+      const m = guidanceMix(0, flow)
+      expect(m.pathStrength).toBe(1)
+      expect(m.pathSeconds).toBe(3)
+      expect(m.energyStrength).toBeLessThan(0.2)
+    }
+  })
+
+  it('lets the energy grow and the path step back as the move is learned and followed', () => {
+    let prev = guidanceMix(0, 1)
+    for (let reps = 1; reps <= 6; reps++) {
+      const m = guidanceMix(reps, 1)
+      expect(m.energyStrength).toBeGreaterThan(prev.energyStrength)
+      expect(m.pathStrength).toBeLessThan(prev.pathStrength)
+      expect(m.pathSeconds).toBeLessThan(prev.pathSeconds)
+      prev = m
+    }
+    for (let flow = 0.1; flow <= 1; flow += 0.1) {
+      const a = guidanceMix(2, flow - 0.1)
+      const b = guidanceMix(2, flow)
+      expect(b.energyStrength).toBeGreaterThan(a.energyStrength)
+      expect(b.pathStrength).toBeLessThan(a.pathStrength)
+    }
+  })
+
+  it('never lets the path go, nor the energy overwhelm', () => {
+    const m = guidanceMix(100, 1)
+    expect(m.pathStrength).toBeGreaterThanOrEqual(0.7)
+    expect(m.pathSeconds).toBeGreaterThanOrEqual(1.5)
+    expect(m.energyStrength).toBeLessThanOrEqual(0.6)
   })
 })
 

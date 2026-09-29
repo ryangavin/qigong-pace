@@ -12,15 +12,18 @@ stop and they wait, hold a posture and the hold plays out with you.
 - **Follows your pace.** Each frame, the teacher's move is searched a little
   way ahead for the shape that matches yours, and the teacher eases there. It
   never goes backwards and waits if you lose the shape.
-- **Shows where you're going.** The teacher is a soft light over your own
-  mirrored body, running slightly ahead of you, its hands trailing light
-  along where they go next.
-- **Answers your form.** Where a limb matches, the teacher's light fuses with
-  it and brightens; where it's off, motes drift from your limb toward the
-  shape. (The debug panel colours each limb green, amber or red instead.)
+- **Something to trace.** Over your own mirrored body, each hand gets a
+  bright path of where the teacher's hand goes next, with a bead of light
+  where your hand should be now. Your hand shows as a ring that locks on
+  when it reaches its bead; when it strays, a faint line shows the way back.
+  In a hold the bead waits and a thin ring fills for as long as the hold
+  lasts. The teacher's body is there too, as a faint outline.
+  (The debug panel colours each limb green, amber or red instead.)
 - **Qi you can see.** As you practise slowly and in step, a soft sea of
   energy gathers in your body and around it: in the palms, below the navel,
   down to the feet, up through the crown. It follows your real silhouette.
+  Learning comes first: while a move is new the energy barely shows, and it
+  grows as you come to know the move, while its paths step back.
   Now and then, once you know the move, a quiet line invites you to notice a
   sensation practitioners report (see [docs/sensations.md](docs/sensations.md)).
 - **35 built-in moves** from Ba Duan Jin, Shibashi, Yi Jin Jing, Wu Qin Xi,
@@ -41,12 +44,14 @@ npm run dev
 ```
 
 Open the printed URL, click **Start camera** and step back until your whole
-body is in view (or choose Seated). The teacher appears as a soft light over
-your own body; move the pointer to bring back the move list.
+body is in view (or choose Seated), and bring your hands to the two lights;
+then follow the paths. Move the pointer to bring back the move list.
 **Watch a simulated student instead** (or `/?sim`) shows it working without a
 camera. `?palette=jade` (or `ember`; `dusk` is the default) changes the
-energy's colours, and `?qi=0.8` starts with that much qi gathered, for looking
-at the view without practising for minutes first.
+energy's colours, `?qi=0.8` starts with that much qi gathered and `?reps=4`
+as if each move were already well known, for looking at the view without
+practising for minutes first; `?wander=2` makes the simulated student's hand
+stray further off its path.
 
 `/debug.html` is the debug panel for working on the engine: the teacher and
 you side by side, a timeline, your pace, the matching sliders and loading a

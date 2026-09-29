@@ -57,11 +57,10 @@ body {
     linear-gradient(rgb(28 44 64 / 0.32), rgb(28 44 64 / 0.32));
 }
 
-/* Light layers: screened, so they only ever add light. The energy layer is
-   src/energy/; the guidance overlay draws the teacher. Between them the shade
-   (not screened) dims the energy a little under the teacher's hands. */
-.energy,
-#guidance {
+/* The energy layer (src/energy/) is screened, so it only ever adds light. The
+   guidance over it is not: its bright lines carry their own dark casing, so
+   they stay crisp however bright the energy below. */
+.energy {
   mix-blend-mode: screen;
 }
 

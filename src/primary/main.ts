@@ -7,14 +7,12 @@ import { QiModel } from '../qi'
 import { SimStudent } from '../sim'
 import {
   alignment,
-  alignPoseTo,
   bodyScale,
   computeFeatures,
   coverView,
   JOINTS,
   poseFromLandmarks,
   jointOf,
-  segmentErrors,
   SEGMENTS,
   toPx,
   type Features,
@@ -22,16 +20,14 @@ import {
   type Posture,
   type Pt,
 } from '../skeleton'
-import { Guidance, handPath } from './guidance'
+import { beadFrame, Guidance, guidanceMix, handPath, holdAt, holdProgress, matchOf, wristsAt } from './guidance'
 import { Invitations } from './invitations'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const params = new URLSearchParams(location.search)
 
-/** How far ahead of the learner the ghost moves, in seconds of the move. */
+/** How far ahead of the learner the beads are, in seconds of the move. */
 const LEAD_SEC = 0.5
-/** How much of the hands' way ahead the comet tails show. */
-const TRAIL_SEC = 1.5
 /** How long the move's cue stays once the move begins. */
 const CUE_SEC = 9
 /** Stillness before the chrome fades away. */
@@ -45,12 +41,20 @@ let posture = loadPosture()
 const available = () => DEMO_MOVES.filter((m) => m.postures.includes(posture))
 let move: Move = available()[0] ?? DEMO_MOVES[0]
 let ref: Reference = referenceFromMove(move, posture)
+// ?reps=2 starts each move as if already practised that many times, smoothly:
+// a dev aid for looking at the view once the energy has grown.
+const startReps = Math.max(0, Math.floor(Number(params.get('reps')) || 0))
 let follower = new Follower(ref)
+follower.reps = startReps
+/** How well the learner has been tracking this move lately, 0..1; with `follower.reps`, it sets the `guidanceMix`. */
+let flow = startReps ? 1 : 0
 
 function selectMove(m: Move) {
   move = m
   ref = referenceFromMove(m, posture)
   follower = new Follower(ref, follower.opts)
+  follower.reps = startReps
+  flow = startReps ? 1 : 0
   sim.pos = 0
   cueUntil = -1
 }
@@ -92,12 +96,15 @@ let tracker: PoseTracker | null = null
 const cam = $<HTMLVideoElement>('cam')
 let lastCamTime = -1
 let user: { pose: Pose; feats: Features; aspect: number } | null = null
-/** The learner eased a little, so the ghost laid on them doesn't shiver with the tracker. */
+/** The learner eased a little, so the guidance laid on them doesn't shiver with the tracker. */
 let calm: Pose | null = null
 
 // ?sim drives the view with a simulated student; ?sim=0.6 sets its speed.
+// ?wander=2 lets its screen-right hand stray further (torso lengths; 0.9 by
+// default, 0 keeps it on the path), to see the hand ring off its path.
 const simParam = params.get('sim')
-const sim = new SimStudent({ speed: Number(simParam) || 0.5, wander: 0.9 })
+const wanderParam = Number(params.get('wander'))
+const sim = new SimStudent({ speed: Number(simParam) || 0.5, wander: params.has('wander') && wanderParam >= 0 ? wanderParam : 0.9 })
 
 async function startCamera() {
   const err = $('cameraError')
@@ -171,17 +178,16 @@ const paletteParam = params.get('palette') as PaletteName
 const palette: PaletteName = PALETTE_NAMES.includes(paletteParam) ? paletteParam : 'dusk'
 
 /**
- * How strongly the qi energy shows in the primary view, 0..1 (1 is the energy
- * layer as tuned on energy.html). Kept modest so the guidance reads first and
- * the energy stays in the background of learning; raise it to let the energy
- * carry more of the view.
+ * The balance of guidance and energy, eased from `guidanceMix`: the energy
+ * only glimmers while the move is new and grows as it is learned (its strength
+ * 1 is the energy layer as tuned on energy.html).
  */
-export const energyStrength = 0.5
+let mix = guidanceMix(startReps, flow)
 
 /** The energy layer, or null where WebGL2 isn't available: the view works without it. */
 let energy: EnergyLayer | null = null
 try {
-  energy = createEnergyLayer($<HTMLCanvasElement>('energy'), { palette, strength: energyStrength })
+  energy = createEnergyLayer($<HTMLCanvasElement>('energy'), { palette, strength: mix.energyStrength })
 } catch (e) {
   console.warn('No energy layer:', e)
   $('energy').hidden = true
@@ -193,7 +199,23 @@ function drawEnergy(dt: number) {
   const c = $<HTMLCanvasElement>('energy')
   const aspect = aspectNow()
   const view = { ...coverView(c.clientWidth, c.clientHeight, aspect), aspect }
+  energy.setStrength(mix.energyStrength)
   energy.render(qi.frame, calm, view, dt)
+}
+
+/** Follow how well the learner is tracking the move, and ease the mix of guidance and energy toward it. */
+function updateMix(dt: number) {
+  if (user && follower.state === 'following') {
+    const target = follower.lost ? 0 : matchOf(follower.distance, follower.opts.matchThreshold)
+    flow += (target - flow) * (1 - Math.exp(-dt / 4))
+  }
+  const to = guidanceMix(follower.reps, flow)
+  const k = 1 - Math.exp(-dt / 1.5)
+  mix = {
+    pathStrength: mix.pathStrength + (to.pathStrength - mix.pathStrength) * k,
+    pathSeconds: mix.pathSeconds + (to.pathSeconds - mix.pathSeconds) * k,
+    energyStrength: mix.energyStrength + (to.energyStrength - mix.energyStrength) * k,
+  }
 }
 
 function easeLearner(dt: number) {
@@ -274,50 +296,51 @@ function drawBackdrop() {
 }
 
 const guidance = new Guidance(() => reducedMotion.matches)
-const errs = new Float32Array(SEGMENTS.length)
 let presence = 0
-let ghost: Pose | null = null
-let ghostPlace: ((p: Pt) => Pt) | null = null
+/** How the teacher was last laid on the learner; it stays while no one is seen, and fades. */
+let place: ((p: Pt) => Pt) | null = null
 
 function drawGuidance(dt: number, time: number) {
   const c = $<HTMLCanvasElement>('guidance')
   const { w, h } = fitCanvas(c)
   const ctx = c.getContext('2d')!
-  const shadeCanvas = $<HTMLCanvasElement>('shade')
-  fitCanvas(shadeCanvas)
-  const shade = shadeCanvas.getContext('2d')!
-  const shown = follower.state === 'waiting' ? 0 : follower.displayFrame(LEAD_SEC)
-  const teacher = ref.poses[Math.round(shown)]
-  // The ghost stays where it was last laid while no one is seen, and fades.
-  if (calm) {
-    ghost = alignPoseTo(teacher, calm, ref.posture)
-    ghostPlace = alignment(teacher, calm, ref.posture)
-  }
+  const waiting = follower.state === 'waiting'
+  const moving = follower.state === 'following'
+  const pos = waiting ? 0 : follower.pos
+  // Waiting, the beads sit at the opening shape and fill as the learner holds it.
+  const hold = moving ? holdAt(ref, pos, follower.opts.holdMotion) : null
+  const bead = waiting ? 0 : beadFrame(ref, pos, LEAD_SEC, hold)
+  const teacher = ref.poses[Math.round(bead)]
+  if (calm) place = alignment(teacher, calm, ref.posture)
   const target = follower.state === 'done' ? 0.45 : calm ? 1 : 0
   presence += (target - presence) * (1 - Math.exp(-dt / 0.8))
-  if (!ghost || !ghostPlace) {
+  if (!place) {
     ctx.clearRect(0, 0, w, h)
-    shade.clearRect(0, 0, w, h)
     return
   }
-  if (user) {
-    segmentErrors(user.feats, follower.state === 'waiting' ? ref.feats[0] : ref.feats[follower.frame], errs)
-  }
-  const moving = follower.state === 'following'
+  const none = { l: [], r: [] }
+  const shape = {} as Pose
+  for (const j of JOINTS) shape[j] = place(teacher[j])
+  const due = (bead - pos) / ref.fps
+  // The traced stretch reaches a little way back of where the follower puts
+  // the learner too, so a hand a moment behind still counts as on its way.
+  const from = Math.max(0, pos - LEAD_SEC * ref.fps)
   guidance.draw(ctx, {
     view: coverView(w, h, aspectNow()),
-    ghost,
+    dpr: window.devicePixelRatio || 1,
+    shape,
     learner: calm,
-    errs: user ? errs : null,
-    threshold: follower.opts.matchThreshold,
     posture: ref.posture,
-    trail: moving ? handPath(ref, shown, TRAIL_SEC, ghostPlace) : { l: [], r: [] },
+    behind: moving ? handPath(ref, from, (bead - from) / ref.fps, place) : none,
+    ahead: moving ? handPath(ref, bead, Math.max(0, mix.pathSeconds - due), place) : none,
+    bead: wristsAt(ref, bead, place),
+    hold: waiting ? follower.startProgress : hold ? holdProgress(hold, pos) : null,
+    waiting,
     presence,
-    // Without the energy (no WebGL2, or its context lost) the ghost stays whole and needs no shade.
-    qi: energy?.live ? qi.frame.level : 0,
+    pathStrength: mix.pathStrength,
     dt,
     time,
-  }, shade)
+  })
 }
 
 // ---- Words -----------------------------------------------------------------
@@ -358,7 +381,9 @@ function lineFor(now: number): string {
       : 'Step back until the whole of you is seen.'
   if (f.state === 'waiting') {
     if (f.startProgress > 0) return 'Rest here, and breathe.'
-    return ref.posture === 'seated' ? 'Settle into the opening shape.' : 'Step into the opening shape.'
+    return ref.posture === 'seated'
+      ? 'Settle into the opening shape: bring your hands to the lights.'
+      : 'Step into the opening shape: bring your hands to the lights.'
   }
   if (f.state === 'done') return 'Let it settle. The form is complete.'
   if (f.lost) return 'Find the shape again.'
@@ -418,6 +443,7 @@ function frame(now: number) {
   easeLearner(dt)
   follower.update(user?.feats ?? null, dt)
   if (source !== 'none') qi.update({ follower, pose: user?.pose ?? null, dt })
+  updateMix(dt)
   if (source === 'sim') drawBackdrop()
   if (source !== 'none') drawEnergy(dt)
   drawGuidance(dt, now / 1000)
