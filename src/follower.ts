@@ -47,8 +47,6 @@ export interface FollowerOptions {
   maxRate: number
   /** Below this motion the teacher is holding still, and the hold plays at real time while the learner holds too. */
   holdMotion: number
-  /** How much worse the frame a moment into a hold may match the learner, and the hold still run at real time. */
-  holdTolerance: number
   /** Mean segment mismatch (torso lengths) that counts as "in the pose". */
   matchThreshold: number
   /** Past matchThreshold × this, the learner is lost and the teacher waits. */
@@ -58,13 +56,15 @@ export interface FollowerOptions {
   loop: boolean
 }
 
+/** Slack on the hold check, so tracker noise in a true hold doesn't stall it. */
+const HOLD_EPS = 0.005
+
 export const DEFAULT_OPTIONS: FollowerOptions = {
   searchAheadSec: 1.5,
   jumpPenaltyPerSec: 0.015,
   smoothingSec: 0.15,
   maxRate: 5,
   holdMotion: 0.08,
-  holdTolerance: 0.01,
   matchThreshold: 0.22,
   lostFactor: 1.5,
   startHoldSec: 0.6,
@@ -81,9 +81,10 @@ export type FollowState = 'waiting' | 'following' | 'done'
  * backwards: if the learner stops, the teacher stops; if they go back, the
  * teacher waits for them to come forward again. Where the teacher is holding
  * still, every frame looks alike, so instead the hold runs at real time while
- * the learner holds the shape too, as long as the teacher a moment later
- * matches them as well. Slow, subtle movement also reads as a hold; there the
- * frame ahead matches worse, so the teacher keeps to the learner's pace.
+ * the learner holds the shape too, unless the teacher a moment later pulls
+ * away from them by more than half of how far the teacher itself moves. Slow,
+ * subtle movement also reads as a hold; there the teacher pulls away, so it
+ * keeps to the learner's pace. A hold at the very end always runs on to done.
  */
 export class Follower {
   state: FollowState = 'waiting'
@@ -174,10 +175,14 @@ export class Follower {
     }
     if (this.inHold && this.distance < opts.matchThreshold) {
       // Slow or subtle movement can read as a hold too. Only run it at real
-      // time if the teacher a moment on still matches the learner as well:
-      // true in a hold, but not where the teacher would pull away from them.
-      const ahead = Math.min(n - 1, this.frame + Math.max(1, Math.round(LOOKAHEAD_SEC * fps)))
-      if (distance(user, ref.feats[ahead]) <= this.distance + opts.holdTolerance) {
+      // time unless the teacher a moment on pulls away from the learner by
+      // more than half of how far the teacher itself moves in that moment.
+      // Near the end of the move, always run on so a held final pose finishes.
+      const ahead = this.frame + Math.max(1, Math.round(LOOKAHEAD_SEC * fps))
+      const atEnd = ahead >= n - 1
+      const a = Math.min(n - 1, ahead)
+      const pull = distance(user, ref.feats[a]) - this.distance
+      if (atEnd || pull <= 0.5 * distance(ref.feats[this.frame], ref.feats[a]) + HOLD_EPS) {
         step = Math.max(step, dt * fps)
       }
     }

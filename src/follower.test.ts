@@ -180,6 +180,34 @@ describe('Follower', () => {
     expect((f.pos - start) / video.fps).toBeLessThan(1.4)
   })
 
+  it('runs a hold through to its end while the learner holds for its full length', () => {
+    const f = new Follower(lift)
+    const rand = rng(11)
+    for (let i = 0; i < 30; i++) f.update(noisy(lift.poses[0], rand), DT)
+    let learner = 0
+    const top = Math.round(8.5 * lift.fps)
+    const end = Math.round(11 * lift.fps)
+    while (f.pos < top - 2) {
+      learner = Math.min(top, learner + lift.fps * DT)
+      f.update(noisy(lift.poses[Math.round(learner)], rand), DT)
+    }
+    for (let t = 0; t < 2.5; t += DT) f.update(noisy(lift.poses[top], rand), DT)
+    expect(f.pos).toBeGreaterThan(end - 0.35 * lift.fps)
+  })
+
+  it('reaches done while the learner holds the final rest pose', () => {
+    const f = new Follower(lift)
+    const rand = rng(12)
+    for (let i = 0; i < 30; i++) f.update(noisy(lift.poses[0], rand), DT)
+    const last = lift.poses.length - 1
+    let learner = 0
+    for (let t = 0; t < 40 && f.state !== 'done'; t += DT) {
+      learner = Math.min(last, learner + lift.fps * DT)
+      f.update(noisy(lift.poses[Math.round(learner)], rand), DT)
+    }
+    expect(f.state).toBe('done')
+  })
+
   it('waits when the learner is lost', () => {
     const f = new Follower(lift)
     const rand = rng(6)
