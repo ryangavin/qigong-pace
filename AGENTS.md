@@ -17,6 +17,13 @@ through the webcam, matches its pose.
   `shaders.ts` holds the look; `body.ts` lays the pose out as capsules; `auto.ts` fakes a `QiFrame` from motion.
 - `src/pose.ts`: MediaPipe pose tracking. With `segmentation` it also keeps a small person mask: `src/mask.ts` shrinks
   CPU masks, `src/maskReader.ts` reads GPU masks back asynchronously (a blit and a pixel buffer, no stall).
+  `openCamera()` asks for 1280×720 at 30 fps and takes what the camera offers if it can't; `eachVideoFrame()` runs
+  detection once per new camera frame (`requestVideoFrameCallback`, or a per-animation-frame check without it).
+  `?model=lite|full|heavy` on either page picks the pose model (`full` by default).
+- `src/smoothing.ts`: `LandmarkFilter` steadies the learner's raw MediaPipe landmarks (every one, before
+  `poseFromLandmarks`) with a One Euro filter per coordinate on real timestamps; a landmark that drops below
+  visibility 0.5 holds its place briefly, then its visibility fades. Both pages filter the camera learner; imported
+  videos use `cleanTrack` instead.
 - `energy.html` (with `src/energy/harness.ts`): a tuning page for the energy layer, driven by a simulated student,
   with sliders, palettes and an fps / GPU-time readout. URL options are listed on the page.
 - `src/qi/`: the qi model. `QiModel` turns practice (the `Follower`, the learner's pose) into energy
@@ -36,13 +43,17 @@ through the webcam, matches its pose.
   so they read over bright energy), chrome.
   `invitations.ts` picks the gentle invitations to notice a sensation (pure, tested; texts from `docs/sensations.md`);
   they share the one line of words with the move's cues and never overlap them.
+  `tracking.ts` (pure, tested) says when the camera can't see the learner well (no one found, too close, a hand
+  unseen), only once it has lasted a moment; its hint sits up top (`#hint`), apart from the move's line.
   URL options: `?sim` (or `?sim=<speed>`) drives it with the simulated student over a synthetic dark room instead
   of the camera, and `?wander=<torso lengths>` (0.9 by default) sets how far its screen-right hand strays off the
   path; `?palette=dusk|jade|ember`; `?qi=<0..1>` starts the session with that much qi and `?reps=<n>` starts each
   move as if already practised n times smoothly (dev aids for looking at higher qi and the grown energy without
   practising for minutes).
 - `debug.html`, `src/debug/`: the debug panel for developing the engine: teacher and learner side by side,
-  timeline, pace, the live `QiFrame` readout, sliders and video import.
+  timeline, pace, the live `QiFrame` readout, sliders and video import. With the camera it also shows the
+  detection rate in Hz, each joint's visibility (raw → filtered), and the raw landmarks as faint dots under the
+  filtered skeleton.
 - `vite.config.ts` makes every root-level `*.html` a build entry, so a new page needs no config change.
 
 ## Tests and checks
@@ -51,8 +62,9 @@ Run each once, after your last edit:
 
 - `npm run check` (`tsc --noEmit`): type-check. Run after any change to `src/`.
 - `npm test` (`vitest run`): unit tests in `src/**/*.test.ts`. Run after changing matching, following, moves,
-  the qi model, the simulated student, the guidance overlay's helpers, the invitations, the mask shrinking, or
-  the energy layer's geometry and auto frame. Add tests for new behaviour there.
+  the qi model, the simulated student, the guidance overlay's helpers, the invitations, the tracking hints, the
+  landmark filter (`src/smoothing.ts`), the mask shrinking, or the energy layer's geometry and auto frame.
+  Filtering and the tracking hints on a live camera need a real person: check them on `debug.html`. Add tests for new behaviour there.
 - The energy layer's look has no automated check: open `energy.html` in the dev server (`npx vite`) and look,
   and the primary view at `/?sim&qi=0.8` and `/?sim&qi=0.8&reps=4` (try each `palette`; the hand paths must stay
   legible over the energy). The GPU mask read-back needs a real person in
