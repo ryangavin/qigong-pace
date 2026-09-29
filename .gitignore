@@ -1,3 +1,5 @@
 node_modules
 dist
 .claude/worktrees
+# Throwaway tests that read the owner's own files (see AGENTS.md); never committed.
+*.local.test.ts

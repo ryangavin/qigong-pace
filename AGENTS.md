@@ -84,6 +84,21 @@ through the webcam, matches its pose.
   timeline, pace, the live `QiFrame` readout, sliders and video import. With the camera it also shows the
   detection rate in Hz, each joint's visibility (raw → filtered), and the raw landmarks as faint dots under the
   filtered skeleton.
+- `calibrate.html`, `src/calibration/`: the calibration, ground truth about the owner's body, reach and tracking
+  for developers who can't use a camera (linked quietly from the primary view and the debug panel). A calm guided
+  page in the primary view's look (it reuses `src/primary/style.css`, `Guidance` and `backdrop.ts`): simple
+  reference tasks (`tasks.ts`: still, overhead, sides, palms together, belly, forward, knees standing only, arm
+  circles, moving through water), each a prompt, the shape shown in light, a countdown and a few seconds of capture;
+  Skip, Again, Back and Finish now. `recording.ts` keeps each task's raw landmarks in the session frame format;
+  `measure.ts` (pure) measures from those alone, raw and through the `LandmarkFilter`: segment lengths
+  (`Calibration`), the palms' reach envelope (sectors of 30°, clockwise from up, around each shoulder), overhead
+  height, side span, per-joint visibility and dropouts (with where each happened), jitter held still, the filter's
+  lag moving, framing, how long each shape took to settle, and how closely it matched (`distance`, as the follower
+  measures). `audit.ts` fits every built-in move for the posture to the measured body, lays it on the learner held
+  still (`fitOnto`) and lists the lights outside the picture or beyond the measured reach, with the moment. `report.ts`
+  builds, words (`describe`), writes and reads the file. `sim.ts` is a simulated learner of known build doing the
+  tasks: `?sim` on the page, with `?arms=`, `?shoulders=`, `?zoom=` (1.3: the hands leave the top) and `?reach=`
+  (the highest it raises its arms, degrees), and `simulateCalibration` for tests.
 - `vite.config.ts` makes every root-level `*.html` a build entry, so a new page needs no config change.
 
 ## Tests and checks
@@ -95,7 +110,9 @@ Run each once, after your last edit:
   the body fitting (`src/fit.test.ts`: palm centres, calibration, retargeting, and a learner built unlike the
   teacher following moves to the end with every bead locked on), the qi model, the simulated student, the
   guidance overlay's helpers, the invitations, the tracking hints, the landmark filter (`src/smoothing.ts`), the
-  mask shrinking, the energy layer's geometry and auto frame, or recorded sessions (`src/session.ts`).
+  mask shrinking, the energy layer's geometry and auto frame, recorded sessions (`src/session.ts`), or the
+  calibration (`src/calibration/calibration.test.ts`: measuring simulated learners of known build, injected
+  dropouts, the audit, the file's round trip).
   Filtering and the tracking hints on a live camera need a real person: check them on `debug.html`, or replay one
   of the owner's recorded sessions (below). Add tests for new behaviour there.
 - The energy layer's look has no automated check: open `energy.html` in the dev server (`npx vite`) and look,
@@ -126,3 +143,39 @@ one without a camera:
   facingAway: false })`, as the pages' `takeLandmarks` and `src/session.test.ts` do.
 - Replay runs at real speed; the follower's `dt` comes from the display's frames, as it does live, so a replay can
   differ from the original by a frame's worth of easing. The session's qi starts fresh (and `?qi=`/`?reps=` apply).
+
+## Reading the owner's calibration
+
+The owner runs `calibrate.html` at the webcam; it downloads `qigong-calibration-<yyyy-mm-dd-hhmm>.json` to
+`~/Downloads` and they tell you its name. It is their body's data: read it where it is, and never copy it into the
+repo, a fixture, an issue or a PR.
+
+- The file is JSON, readable top down: the header (`format: "qigong-pace-calibration"`, `version`, `recordedAt`,
+  `posture`, `aspect`, `source` camera or sim, `model`, `camera` settings and label, `device`), `summary` (the
+  plain words the owner saw), `measurements` (`Measurements` in `src/calibration/measure.ts`: `units` in frame
+  heights, the `still` pose, `body`, `arm`, `detection`, `joints`, `envelope`, `overhead`, `span`, `jitter`,
+  `framing`, `handsLeave`, `lag`, and per task `match`, `settledAfter`, `joints`, `lengths`, `reach`, `detail`),
+  `audit` (`offenders`: each move's spans of lights outside the picture or beyond reach, in seconds of the move),
+  then `tasks`: each task's `status`, `attempts`, `phases` (ms from its prompt) and raw `frames` in the session
+  frame format, one per line. Lengths are in torso lengths (seated: shoulder width / 0.84) unless named otherwise;
+  left and right are screen sides, as in `src/skeleton.ts`.
+- To dig in, write a throwaway test named `*.local.test.ts` (git ignores it) and run just that file once, e.g.
+  `npx vitest run src/calibration/owner.local.test.ts`; delete it when done:
+
+  ```ts
+  import { readFileSync } from 'node:fs'
+  import { homedir } from 'node:os'
+  import { it } from 'vitest'
+  import { measure, samplesOf } from './measure'
+  import { parseCalibration, recordingOf } from './report'
+
+  it('reads the owner calibration', () => {
+    const f = parseCalibration(readFileSync(`${homedir()}/Downloads/qigong-calibration-2026-09-29-1830.json`, 'utf8'))
+    console.log(f.summary.join('\n'))
+    // Measured again from the raw frames alone, so a change to measure.ts can be tried on the owner's data.
+    console.log(measure(recordingOf(f)).envelope)
+    // Or step through one task's detections, raw and filtered, as the pages see them.
+    const task = f.tasks.find((t) => t.id === 'overhead')!
+    for (const s of samplesOf(task, f.aspect)) console.log(s.t, s.phase, s.raw?.lWrist, s.pose?.lWrist)
+  })
+  ```

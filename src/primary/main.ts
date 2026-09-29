@@ -17,19 +17,8 @@ import {
 import { clock, downloadSession, fetchSession, isShortcut, onSessionDrop } from '../sessionFiles'
 import { SimStudent } from '../sim'
 import { LandmarkFilter } from '../smoothing'
-import {
-  bodyScale,
-  computeFeatures,
-  coverView,
-  JOINTS,
-  poseFromLandmarks,
-  jointOf,
-  SEGMENTS,
-  toPx,
-  type Features,
-  type Pose,
-  type Posture,
-} from '../skeleton'
+import { computeFeatures, coverView, JOINTS, poseFromLandmarks, type Features, type Pose, type Posture } from '../skeleton'
+import { drawBackdrop, fitCanvas } from './backdrop'
 import {
   beadFrame,
   Guidance,
@@ -426,65 +415,12 @@ function easeLearner(dt: number) {
 
 // ---- Drawing -------------------------------------------------------------
 
-function fitCanvas(c: HTMLCanvasElement) {
-  const dpr = window.devicePixelRatio || 1
-  const w = Math.round(c.clientWidth * dpr)
-  const h = Math.round(c.clientHeight * dpr)
-  if (c.width !== w || c.height !== h) {
-    c.width = w
-    c.height = h
-  }
-  return { w, h }
-}
-
 const aspectNow = () =>
   source === 'camera'
     ? cam.videoWidth / cam.videoHeight || 16 / 9
     : source === 'replay' && replay
       ? replay.session.aspect
       : ref.aspect
-
-/**
- * Without a camera, a stand-in for one: a dim room with the simulated student
- * (or a replayed learner) as a soft dark figure, graded like the camera would be.
- */
-function drawBackdrop() {
-  const c = $<HTMLCanvasElement>('backdrop')
-  const { w, h } = fitCanvas(c)
-  const ctx = c.getContext('2d')!
-  const g = ctx.createRadialGradient(w * 0.5, h * 0.42, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.75)
-  g.addColorStop(0, '#39414c')
-  g.addColorStop(1, '#101318')
-  ctx.fillStyle = g
-  ctx.fillRect(0, 0, w, h)
-  if (!calm) return
-  const view = coverView(w, h, aspectNow())
-  const T = bodyScale(calm, ref.posture) * view.s
-  ctx.save()
-  ctx.strokeStyle = ctx.fillStyle = '#4c545e'
-  ctx.lineCap = 'round'
-  ctx.lineJoin = 'round'
-  ctx.filter = `blur(${Math.round(T * 0.05)}px)`
-  ctx.beginPath()
-  for (const j of ['lShoulder', 'rShoulder', 'rHip', 'lHip'] as const) ctx.lineTo(...toPx(view, calm[j]))
-  ctx.closePath()
-  ctx.lineWidth = T * 0.3
-  ctx.fill()
-  ctx.stroke()
-  ctx.lineWidth = T * 0.2
-  SEGMENTS.forEach((s) => {
-    if (!s.draw || s.name === 'shoulders' || s.name === 'hips') return
-    ctx.beginPath()
-    ctx.moveTo(...toPx(view, jointOf(calm!, s.a)))
-    ctx.lineTo(...toPx(view, jointOf(calm!, s.b)))
-    ctx.stroke()
-  })
-  const [hx, hy] = toPx(view, calm.head)
-  ctx.beginPath()
-  ctx.ellipse(hx, hy, T * 0.2, T * 0.26, 0, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.restore()
-}
 
 const guidance = new Guidance(() => reducedMotion.matches)
 let presence = 0
@@ -674,7 +610,7 @@ function frame(now: number) {
   follower.update(user?.feats ?? null, dt)
   if (source !== 'none') qi.update({ follower, pose: user?.pose ?? null, dt })
   updateMix(dt)
-  if (source === 'sim' || source === 'replay') drawBackdrop()
+  if (source === 'sim' || source === 'replay') drawBackdrop($<HTMLCanvasElement>('backdrop'), calm, aspectNow(), ref.posture)
   if (source !== 'none') drawEnergy(dt)
   drawGuidance(dt, now / 1000)
   // The move's own words come first; an invitation only ever fills a quiet line.

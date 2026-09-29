@@ -109,6 +109,29 @@ export class CalibrationSim {
   }
 }
 
+/**
+ * The simulated learner the URL asks for, as the primary view builds its
+ * simulated student: `?arms=` (shoulder to wrist) and `?shoulders=` in torso
+ * lengths (typically 1.15 and 0.8), `?zoom=` (1.3 brings it near enough that
+ * its hands leave the top) and `?reach=` (the highest it raises its arms, in
+ * degrees; 180 overhead).
+ */
+export function simFromParams(params: URLSearchParams): CalibrationSimOptions {
+  const body = { ...TYPICAL_BODY }
+  const arms = Number(params.get('arms'))
+  if (arms > 0) {
+    const k = arms / (body.upperArm + body.forearm)
+    body.upperArm *= k
+    body.forearm *= k
+    body.hand *= k
+  }
+  const shoulders = Number(params.get('shoulders'))
+  if (shoulders > 0) body.shoulders = shoulders
+  const zoom = Number(params.get('zoom'))
+  const reach = Number(params.get('reach'))
+  return { body, zoom: zoom > 0 ? zoom : 1, maxRaise: reach > 0 ? reach : 180 }
+}
+
 export interface SimulateOptions {
   posture?: Posture
   sim?: CalibrationSim

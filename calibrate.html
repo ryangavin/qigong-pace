@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>At Your Pace · Calibration</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400;1,500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/primary/style.css" />
+    <link rel="stylesheet" href="/src/calibration/style.css" />
+  </head>
+  <body>
+    <!-- As the primary view: the camera graded dark, the shape to make as light over it. -->
+    <div class="layer camera" aria-hidden="true">
+      <video id="cam" muted playsinline></video>
+      <canvas id="backdrop" hidden></canvas>
+    </div>
+    <div class="layer grade" aria-hidden="true"></div>
+    <canvas id="guidance" class="layer" aria-hidden="true"></canvas>
+
+    <div class="chrome">
+      <div class="corner top-left">
+        <span id="step" class="step" aria-live="polite"></span>
+      </div>
+      <div class="corner top-right">
+        <button id="finish" type="button" hidden>Finish now</button>
+      </div>
+      <div class="corner bottom-left session">
+        <button id="back" type="button" hidden>Back</button>
+        <button id="again" type="button" hidden>Again</button>
+        <button id="skip" type="button" hidden>Skip</button>
+      </div>
+      <a class="corner bottom-right debug-link" href="./">practice</a>
+    </div>
+
+    <section id="intro" class="intro">
+      <h1>Getting to know you</h1>
+      <p>A few simple shapes, about three minutes, so the guide can be fitted to you.</p>
+      <div id="posture" role="group" aria-label="Posture">
+        <button type="button" data-posture="standing" aria-pressed="true">Standing</button>
+        <button type="button" data-posture="seated" aria-pressed="false">Seated</button>
+      </div>
+      <button id="begin" type="button">Begin</button>
+      <a id="simLink" class="quiet" href="?sim">Try it with a simulated student</a>
+      <p id="cameraError" class="error" hidden></p>
+      <p class="fine">
+        Each shape is asked in words and shown in light; skip any you'd rather not do. At the end a file downloads with
+        the tracked points of your body (no images) and what was measured from them.
+      </p>
+    </section>
+
+    <section id="done" class="intro summary" hidden>
+      <h1>Thank you</h1>
+      <ul id="summary"></ul>
+      <p id="saved" class="fine"></p>
+      <div class="actions">
+        <button id="download" type="button">Download again</button>
+        <a class="quiet" href="./">Back to practice</a>
+        <a id="restart" class="quiet" href="">Calibrate again</a>
+      </div>
+    </section>
+
+    <!-- The countdown, and tracking trouble, up top; the prompt below. -->
+    <p id="hint" class="hint" aria-live="polite"></p>
+    <p id="line" class="line" aria-live="polite"></p>
+    <div class="progress" aria-hidden="true"><div id="progress"></div></div>
+
+    <script type="module" src="/src/calibration/main.ts"></script>
+  </body>
+</html>

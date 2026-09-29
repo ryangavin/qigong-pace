@@ -41,7 +41,11 @@
         <button id="record" type="button" aria-pressed="false" aria-keyshortcuts="r" hidden>Record</button>
         <span id="replayNote" aria-live="polite"></span>
       </div>
-      <a class="corner bottom-right debug-link" href="debug.html">debug</a>
+      <div class="corner bottom-right">
+        <!-- A few simple shapes that measure the learner and the camera, for the developers. -->
+        <a class="debug-link" href="calibrate.html">calibrate</a>
+        <a class="debug-link" href="debug.html">debug</a>
+      </div>
     </div>
     <!-- Stays, faintly, while recording, even when the chrome has faded. -->
     <span id="recordDot" class="record-dot" title="Recording" hidden></span>

@@ -78,6 +78,32 @@ images. The debug panel records the same way (**Record session**).
 To watch a recording yourself, drop the file onto either page, or use
 **Replay a session…** in the debug panel, which can also pause and scrub it.
 
+## Calibrate for the developers
+
+The developers can't stand in front of your camera, so a short calibration
+tells them how you're built, how far you reach and how well the camera sees
+you. It takes about three minutes and needs no qi gong.
+
+1. Click **calibrate** at the bottom right of the practice view (or open
+   `/calibrate.html`), choose **Standing** or **Seated**, and click **Begin**.
+2. Nine simple tasks follow (eight seated): standing still, hands overhead,
+   arms out to the sides, palms together, hands on the belly, arms reaching
+   forward, knees bent (standing only), big arm circles, and moving slowly as
+   if through water. Each is asked in words and shown in light over your
+   mirrored body; a short countdown lets you settle, then hold it (or keep
+   moving) until the thin line along the bottom fills. **Skip** passes one by,
+   **Again** repeats it, **Back** returns to the one before and **Finish now**
+   stops early.
+3. At the end you see what was found in plain words, and a file named like
+   `qigong-calibration-2026-09-29-1830.json` downloads to your Downloads
+   folder. Tell the developers its name; they read it from there.
+
+The file holds the tracked positions of your body's landmarks during each
+shape (no video or images), what was measured from them, a check of every
+move's lights against your reach, and the camera's and browser's own
+description of themselves. `/calibrate.html?sim` runs it with a simulated
+student.
+
 ## Develop
 
 See [AGENTS.md](AGENTS.md) for the layout and the test commands
