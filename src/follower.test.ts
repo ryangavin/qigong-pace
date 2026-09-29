@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildReference, Follower, type Reference } from './follower'
-import { DEMO_MOVES, referenceFromMove, sample, type BodyKey, type Move } from './moves'
+import { DEMO_MOVES, poseAt, referenceFromMove, sample, type BodyKey, type Move } from './moves'
 import {
   cleanTrack,
   computeFeatures,
@@ -286,6 +286,48 @@ describe('Seated practice', () => {
     expect(f.state).toBe('waiting')
     for (let i = 0; i < 30; i++) f.update(seatedLearner(seated.poses[0], rand), DT)
     expect(f.state).toBe('following')
+  })
+
+  it('carries a still learner whose shape is a little off into a hold, and through it at real time', () => {
+    // The catalog's Holding up the sky, seated: the arms rise to overhead by 8.5s and hold there to 10.5s.
+    // As the arms come up, this learner's stay 10° short of overhead with the forearms turned 10° further,
+    // so, held there, they match the way into the hold a little better than the hold itself: the owner's
+    // first session stalled like this for 9s at 8.1s.
+    const move = DEMO_MOVES.find((m) => m.id === 'lift-sky')!
+    const ref = referenceFromMove(move, 'seated')
+    const learnerAt = (t: number) => {
+      const k = sample(move.keys, t)
+      const o = 10 * Math.min(1, Math.max(0, (t - 6) / 2.5))
+      return poseAt({ ...k, lArm: k.lArm - o, rArm: k.rArm - o, lElbow: k.lElbow + o, rElbow: k.rElbow + o }, 'seated')
+    }
+    const f = new Follower(ref)
+    const rand = rng(14)
+    for (let i = 0; i < 30; i++) f.update(seatedLearner(learnerAt(0), rand), DT)
+    expect(f.state).toBe('following')
+    for (let t = 0; t < 8.5; ) {
+      t = Math.min(8.5, t + DT)
+      f.update(seatedLearner(learnerAt(t), rand), DT)
+    }
+    // Held overhead, they are in the shape (the owner's was 0.12–0.17 off).
+    const holdStart = Math.round(8.5 * ref.fps)
+    const holdEnd = Math.round(10.5 * ref.fps)
+    const d = distance(seatedLearner(learnerAt(8.5), rng(1)), ref.feats[holdStart])
+    expect(d).toBeGreaterThan(0.12)
+    expect(d).toBeLessThan(0.18)
+    expect(f.pos).toBeLessThan(holdStart)
+    let entered = Infinity
+    let through = Infinity
+    for (let s = 0; s < 6; s += DT) {
+      f.update(seatedLearner(learnerAt(8.5), rand), DT)
+      if (f.pos >= holdStart && entered === Infinity) entered = s
+      if (f.pos >= holdEnd - 1 && through === Infinity) through = s
+    }
+    // Into the hold after a moment to settle, then through it in about its own two seconds.
+    expect(entered).toBeLessThan(2)
+    expect(through - entered).toBeGreaterThan(1.4)
+    expect(through - entered).toBeLessThan(2.8)
+    // And not much further: the arms coming down are the learner's to lead.
+    expect(f.pos).toBeLessThan(holdEnd + ref.fps)
   })
 
   it.each([0.5, 1])('follows a learner moving at %s× speed to the end', (speed) => {
