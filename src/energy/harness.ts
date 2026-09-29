@@ -1,9 +1,9 @@
 import { DEMO_ASPECT, DEMO_MOVES, referenceFromMove } from '../moves'
+import { QI_REGIONS, quietFrame, type QiFrame } from '../qi'
 import { containView, torsoLength, type Pose, type View } from '../skeleton'
 import { createAutoQi } from './auto'
 import { createEnergyLayer } from './layer'
 import { PALETTE_NAMES, type PaletteName } from './palettes'
-import { QI_REGIONS, quietFrame, type QiFrame } from './types'
 
 // energy.html: a tuning bench for the energy layer. A simulated student plays
 // a built-in move on a dark stage; the qi frame comes from sliders, or is read

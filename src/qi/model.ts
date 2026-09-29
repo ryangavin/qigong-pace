@@ -26,7 +26,17 @@ export interface QiFrame {
   armFlow: { l: number; r: number }
 }
 
-const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
+/** A frame with nothing gathered: the start of a session. */
+export const quietFrame = (): QiFrame => ({
+  level: 0,
+  breath: 0,
+  regions: Object.fromEntries(QI_REGIONS.map((r) => [r, 0])) as Record<QiRegion, number>,
+  palmField: 0,
+  flow: 0,
+  armFlow: { l: 0, r: 0 },
+})
+
+const clamp01 =(x: number) => Math.min(1, Math.max(0, x))
 const smoothstep = (a: number, b: number, x: number) => {
   const u = clamp01((x - a) / (b - a))
   return u * u * (3 - 2 * u)
@@ -97,14 +107,7 @@ export interface QiInput {
  * Every region also glows a little with the session level.
  */
 export class QiModel {
-  frame: QiFrame = {
-    level: 0,
-    breath: 0,
-    regions: Object.fromEntries(QI_REGIONS.map((r) => [r, 0])) as Record<QiRegion, number>,
-    palmField: 0,
-    flow: 0,
-    armFlow: { l: 0, r: 0 },
-  }
+  frame: QiFrame = quietFrame()
 
   private ref: Reference | null = null
   private track: QiTrack | null = null

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { poseAt, type BodyKey } from '../moves'
+import type { QiFrame } from '../qi'
 import { createAutoQi } from './auto'
-import type { QiFrame } from './types'
 
 const DT = 1 / 30
 const key = (k: Partial<BodyKey> = {}): BodyKey => ({ t: 0, lArm: 12, lElbow: 70, rArm: 12, rElbow: 70, sink: 0, ...k })
