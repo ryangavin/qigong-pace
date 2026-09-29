@@ -88,7 +88,7 @@ const HOLD_EPS = 0.005
 const STILL_FAST_SEC = 0.15
 const STILL_SLOW_SEC = 0.6
 /** Below this `stir` the learner counts as still. Above the teacher's `holdMotion`: tracked people sway. */
-const STILL_STIR = 0.15
+const STILL_STIR = 0.25
 /** How long the learner holds the shape, still, while the teacher waits, before the teacher settles in with them. */
 const SETTLE_SEC = 1
 /** Teacher progress (s of the move) that counts as keeping up with the learner, so it isn't waiting on them. */
