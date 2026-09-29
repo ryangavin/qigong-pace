@@ -22,4 +22,7 @@ Run each once, after your last edit:
   Add tests for new behaviour there.
 - `npm run build` (type-check plus `vite build`): run when you touch `index.html`, CSS, imports or build config.
 
+CI (`.github/workflows/ci.yml`) runs the type-check, unit tests and `vite build`
+on every PR and on pushes to `main`; it is the final check.
+
 The app itself needs a webcam; the "simulated student" button exercises it without one.
