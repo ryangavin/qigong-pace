@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEMO_MOVES, referenceFromMove } from '../moves'
 import { JOINTS, type Joint, type Pose, type Posture } from '../skeleton'
-import { TrackingHints, troubleOf } from './tracking'
+import { TRACKING_HINTS, TrackingHints, troubleOf } from './tracking'
 
 const DT = 1 / 30
 
@@ -25,6 +25,13 @@ const nearer = (p: Pose, s: number, aspect: number): Pose => {
   return out
 }
 
+/** `p` moved down the picture by `dy` (up, if negative). */
+const shifted = (p: Pose, dy: number): Pose => {
+  const out = {} as Pose
+  for (const j of JOINTS) out[j] = { ...p[j], y: p[j].y + dy }
+  return out
+}
+
 describe('troubleOf', () => {
   const { pose, aspect } = figure('standing')
   const at = (p: Pose | null, posture: Posture = 'standing') => troubleOf({ pose: p, aspect, posture })
@@ -39,8 +46,17 @@ describe('troubleOf', () => {
   })
 
   it('asks a standing learner to step back when too close', () => {
-    expect(at(hide(pose, 'lAnkle', 'rAnkle'))).toBe('close')
     expect(at(nearer(pose, 1.6, aspect))).toBe('close')
+    // Feet out of sight with the head at the top of the picture: nearer the camera is all that helps.
+    expect(at(hide(shifted(pose, -pose.head.y + 0.05), 'lAnkle', 'rAnkle'))).toBe('close')
+  })
+
+  it('asks a standing learner whose feet are below the frame, with room above, to step back or aim lower', () => {
+    expect(at(hide(pose, 'lAnkle', 'rAnkle'))).toBe('low')
+    const low = shifted(pose, 0.1)
+    expect(low.lAnkle.y).toBeGreaterThan(1)
+    expect(at(low)).toBe('low')
+    expect(TRACKING_HINTS.low.standing).toMatch(/feet/)
   })
 
   it('notices a hand out of sight or out of frame', () => {
@@ -56,6 +72,42 @@ describe('troubleOf', () => {
     const w = Math.abs(p.lShoulder.x - p.rShoulder.x)
     const close = nearer(p, (0.6 * seated.aspect) / w, seated.aspect)
     expect(troubleOf({ pose: close, aspect: seated.aspect, posture: 'seated' })).toBe('close')
+  })
+
+  describe('seated framing', () => {
+    const seated = figure('seated')
+    const sat = (p: Pose) => troubleOf({ pose: p, aspect: seated.aspect, posture: 'seated' })
+    // Hands resting in the lap, the figure's own opening shape.
+    const rest = hide(seated.pose, 'lAnkle', 'rAnkle', 'lKnee', 'rKnee', 'lHip', 'rHip')
+    // As in the owner's first session: sitting low and near, shoulders at 0.72 of the height and
+    // 0.34 across, so the hands in the lap are below the picture and MediaPipe barely sees them.
+    const w = Math.abs(rest.lShoulder.x - rest.rShoulder.x)
+    const ownerLike = nearer(rest, 0.34 / w, seated.aspect)
+    const low = shifted(ownerLike, 0.72 - ownerLike.lShoulder.y)
+
+    it('is fine with the head in the picture and the hands seen in the lap', () => {
+      expect(sat(rest)).toBeNull()
+    })
+
+    it('asks to sit back or aim lower when the hands in the lap are below the frame', () => {
+      expect(sat(hide(low, 'lWrist', 'rWrist'))).toBe('low')
+      expect(sat({ ...low, lWrist: { ...low.lWrist, y: 1.1 }, rWrist: { ...low.rWrist, y: 1.08 } })).toBe('low')
+      expect(TRACKING_HINTS.low.seated).toMatch(/sit back or tilt the camera down/i)
+      expect(TRACKING_HINTS.low.seated).toMatch(/lap/)
+    })
+
+    it('says nothing of the lap while the hands are up and seen', () => {
+      const up = { ...low, lWrist: { ...low.lWrist, y: 0.2 }, rWrist: { ...low.rWrist, y: 0.2 } }
+      expect(sat(up)).toBeNull()
+    })
+
+    it('still just asks for the hands when the lap is in the picture', () => {
+      expect(sat(hide(rest, 'rWrist'))).toBe('hands')
+    })
+
+    it('asks to sit back when the head is above the frame', () => {
+      expect(sat(shifted(rest, -rest.head.y - 0.05))).toBe('close')
+    })
   })
 })
 

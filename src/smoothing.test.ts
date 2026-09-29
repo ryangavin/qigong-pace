@@ -112,6 +112,117 @@ describe('LandmarkFilter', () => {
   })
 })
 
+describe('LandmarkFilter outliers', () => {
+  // A person as MediaPipe gives them (33 landmarks, unmirrored image units): shoulders
+  // `w` apart about `cx`, hips a torso below, wrists wherever the arms are.
+  interface Body {
+    cx?: number
+    y?: number
+    w?: number
+    torso?: number
+    hipVis?: number
+    wrists?: [number, number, number, number]
+    swap?: boolean
+  }
+  const body = ({ cx = 0.5, y = 0.45, w = 0.15, torso = 0.25, hipVis = 0.9, wrists, swap = false }: Body = {}) => {
+    const out = Array.from({ length: 33 }, () => ({ x: cx, y: y - 0.1, visibility: 0.95 }))
+    const s = swap ? -1 : 1
+    out[11] = { x: cx + (s * w) / 2, y, visibility: 0.99 }
+    out[12] = { x: cx - (s * w) / 2, y, visibility: 0.99 }
+    const [lx, ly, rx, ry] = wrists ?? [cx + w, y + 0.2, cx - w, y + 0.2]
+    out[15] = { x: lx, y: ly, visibility: 0.95 }
+    out[16] = { x: rx, y: ry, visibility: 0.95 }
+    out[23] = { x: cx + w / 3, y: y + torso, visibility: hipVis }
+    out[24] = { x: cx - w / 3, y: y + torso, visibility: hipVis }
+    return out
+  }
+  const width = (lm: { x: number; y: number }[]) => Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y)
+  const T = 1000 / 30
+
+  /** A filter that has watched `b` for a second. */
+  const settled = (b: Body = {}) => {
+    const f = new LandmarkFilter()
+    for (let i = 0; i < 30; i++) f.update(body(b), i * T)
+    return f
+  }
+
+  it('passes over a detection whose shoulders collapse, holding the pose', () => {
+    // Arms overhead, MediaPipe sometimes squeezes the shoulders to a third for a frame.
+    const f = settled()
+    const out = f.update(body({ w: 0.05, wrists: [0.2, 0.2, 0.25, 0.2] }), 30 * T)!
+    expect(f.rejected).toBe(1)
+    expect(width(out)).toBeCloseTo(0.15, 3)
+    expect(out[15].x).toBeCloseTo(0.65, 3)
+    expect(out[11].visibility).toBeCloseTo(0.99)
+  })
+
+  it('passes over a detection with the sides swapped, or the body teleported', () => {
+    const f = settled()
+    f.update(body({ swap: true, w: 0.12 }), 30 * T)
+    expect(f.rejected).toBe(1)
+    f.update(body(), 31 * T)
+    f.update(body({ cx: 0.75 }), 32 * T)
+    expect(f.rejected).toBe(2)
+    const out = f.update(body(), 33 * T)!
+    expect(f.rejected).toBe(2)
+    expect((out[11].x + out[12].x) / 2).toBeCloseTo(0.5, 3)
+  })
+
+  it('stretches of the torso count only when the hips are well seen', () => {
+    const f = settled()
+    f.update(body({ torso: 0.4 }), 30 * T)
+    expect(f.rejected).toBe(1)
+    // Seated, the hips are out of frame and MediaPipe's guesses at them wander freely.
+    const g = settled({ hipVis: 0.5 })
+    g.update(body({ torso: 0.4, hipVis: 0.5 }), 30 * T)
+    expect(g.rejected).toBe(0)
+  })
+
+  it('keeps up with fast but real movement', () => {
+    const f = new LandmarkFilter()
+    let out: ReturnType<LandmarkFilter['update']> = null
+    for (let i = 0; i < 60; i++) {
+      // Swaying half a shoulder width a second, leaning in (2% bigger a frame), hands flung wide and back.
+      const k = i / 30
+      const cx = 0.5 + 0.075 * Math.sin(2 * Math.PI * k)
+      const w = 0.15 * 1.02 ** Math.min(i, 20)
+      const a = Math.sin(4 * Math.PI * k)
+      out = f.update(body({ cx, w, wrists: [cx + w + 0.3 * a, 0.3, cx - w - 0.3 * a, 0.3] }), i * T)
+    }
+    expect(f.rejected).toBe(0)
+    expect(width(out!)).toBeCloseTo(0.15 * 1.02 ** 20, 2)
+  })
+
+  it('holds through a flicker of bad detections among good ones', () => {
+    // The owner's session: arms overhead, collapsed and swapped shoulders came and went for a few frames.
+    const f = settled()
+    const bad = [body({ w: 0.06 }), body({ swap: true, w: 0.1 }), body({ w: 0.09 }), body({ swap: true, w: 0.11 })]
+    let t = 30
+    for (const b of [bad[0], body(), bad[1], bad[2], body(), bad[3], bad[0], bad[1], body()]) {
+      const out = f.update(b, t++ * T)!
+      expect(width(out)).toBeGreaterThan(0.14)
+      expect(out[11].x).toBeGreaterThan(out[12].x)
+    }
+    expect(f.rejected).toBe(6)
+  })
+
+  it('takes a real change once it lasts, starting afresh there', () => {
+    // Someone sits down much nearer the camera: the body is suddenly twice the size, and stays so.
+    const f = settled()
+    const near = body({ w: 0.3, torso: 0.5 })
+    let out = f.update(near, 30 * T)!
+    expect(width(out)).toBeCloseTo(0.15, 3)
+    out = f.update(near, 31 * T)!
+    out = f.update(near, 32 * T)!
+    expect(width(out)).toBeCloseTo(0.3, 3)
+    expect(f.rejected).toBe(2)
+    // And from there it follows as usual.
+    out = f.update(near, 33 * T)!
+    expect(f.rejected).toBe(2)
+    expect(width(out)).toBeCloseTo(0.3, 3)
+  })
+})
+
 describe('RateMeter', () => {
   it('settles on the rate of ticks', () => {
     const r = new RateMeter()

@@ -83,6 +83,21 @@ export interface FollowerOptions {
 /** Slack on the hold check, so tracker noise in a true hold doesn't stall it. */
 const HOLD_EPS = 0.005
 
+// How still the learner is: their shape eased over a short and a longer time.
+// Moving steadily, the two part by the speed × the difference of the times.
+const STILL_FAST_SEC = 0.15
+const STILL_SLOW_SEC = 0.6
+/** Below this `stir` the learner counts as still. Above the teacher's `holdMotion`: tracked people sway. */
+const STILL_STIR = 0.25
+/** How long the learner holds the shape, still, while the teacher waits, before the teacher settles in with them. */
+const SETTLE_SEC = 1
+/** Teacher progress (s of the move) that counts as keeping up with the learner, so it isn't waiting on them. */
+const SETTLE_PROGRESS_SEC = 0.15
+/** How near a hold must be for a settled learner to be carried into it. */
+const SETTLE_REACH_SEC = 0.5
+/** How long a still stretch must last to count as a hold to carry a learner into. */
+const SETTLE_HOLD_SEC = 0.5
+
 export const DEFAULT_OPTIONS: FollowerOptions = {
   searchAheadSec: 1.5,
   jumpPenaltyPerSec: 0.015,
@@ -109,6 +124,14 @@ export type FollowState = 'waiting' | 'following' | 'done'
  * away from them by more than half of how far the teacher itself moves. Slow,
  * subtle movement also reads as a hold; there the teacher pulls away, so it
  * keeps to the learner's pace. A hold at the very end always runs on to done.
+ *
+ * A learner whose shape is steadily a little off the teacher's can match the
+ * way into a hold better than the hold, and the look-ahead can't tell that
+ * from slow movement. So it also watches how still the learner is (`stir`):
+ * once they have held the shape, still, for a second while the teacher waited
+ * just short of a hold they already have the shape of, they are `settled`, and
+ * the teacher carries on with them at real time to the hold's end, for as long
+ * as they stay still and in the shape.
  */
 export class Follower {
   state: FollowState = 'waiting'
@@ -123,6 +146,16 @@ export class Follower {
   inHold = false
   lost = false
   reps = 0
+  /** How fast the learner's shape is changing, per second, eased; like the teacher's `motion`. */
+  stir = 0
+  /** The learner is holding the shape, still, and the teacher carries on with them into a hold and through it. */
+  settled = false
+  private fast: Float32Array | null = null
+  private slow: Float32Array | null = null
+  private settleSec = 0
+  private settleFrom = 0
+  /** While settled, the frame the hold being carried through ends at. */
+  private settleUntil = 0
 
   constructor(
     public ref: Reference,
@@ -146,6 +179,12 @@ export class Follower {
     this.distance = Infinity
     this.inHold = false
     this.lost = false
+    this.stir = 0
+    this.settled = false
+    this.fast = null
+    this.slow = null
+    this.settleSec = 0
+    this.settleFrom = 0
   }
 
   update(user: Features | null, dt: number) {
@@ -159,6 +198,7 @@ export class Follower {
       this.easePace(0, dt)
       return
     }
+    this.easeStill(user, dt)
 
     if (this.state === 'waiting') {
       this.distance = distance(user, ref.feats[0])
@@ -210,6 +250,9 @@ export class Follower {
         step = Math.max(step, dt * fps)
       }
     }
+    this.settle(user, lo, dt)
+    // Settled, the teacher carries on into the hold and through it at real time, no faster.
+    if (this.settled) step = dt * fps
     step = Math.min(step, opts.maxRate * fps * dt)
     this.pos += step
     this.easePace(step / (dt * fps), dt)
@@ -223,6 +266,66 @@ export class Follower {
         this.state = 'done'
       }
     }
+  }
+
+  /** Whether the learner is `settled` (see the class comment), and until which frame. */
+  private settle(user: Features, lo: number, dt: number) {
+    const { ref, opts } = this
+    const fps = ref.fps
+    const n = ref.feats.length
+    const release = () => {
+      this.settled = false
+      this.settleSec = 0
+      this.settleFrom = this.pos
+    }
+    if (this.lost || this.stir >= STILL_STIR || this.distance >= opts.matchThreshold) return release()
+    if (this.settled) {
+      if (this.pos >= this.settleUntil) release()
+      return
+    }
+    // The teacher kept up with them, so it wasn't waiting.
+    let restart = this.pos - this.settleFrom > SETTLE_PROGRESS_SEC * fps
+    // Or it has run on past a hold that a slow learner is still in: it is ahead, and must wait.
+    if (ref.motion[this.frame] >= opts.holdMotion) {
+      for (let i = Math.max(0, lo - Math.round(SETTLE_REACH_SEC * fps)); i < lo && !restart; i++) {
+        restart = ref.motion[i] < opts.holdMotion && distance(user, ref.feats[i]) < this.distance
+      }
+    }
+    if (restart) {
+      this.settleSec = 0
+      this.settleFrom = this.pos
+    }
+    this.settleSec += dt
+    // Only just short of a hold: within a hold, or a slow stretch that reads as one, the hold rule judges.
+    if (this.settleSec < SETTLE_SEC || ref.motion[this.frame] < opts.holdMotion) return
+    const reach = Math.min(n - 1, this.frame + Math.round(SETTLE_REACH_SEC * fps))
+    let start = this.frame
+    while (start <= reach && ref.motion[start] >= opts.holdMotion) start++
+    if (start > reach) return
+    let end = start
+    while (end < n - 1 && ref.motion[end] < opts.holdMotion) end++
+    if (end - start < SETTLE_HOLD_SEC * fps || distance(user, ref.feats[start]) >= opts.matchThreshold) return
+    this.settled = true
+    this.settleUntil = end
+  }
+
+  /** Eases the learner's shape at two speeds; how far apart they are says how fast it is changing (`stir`). */
+  private easeStill(user: Features, dt: number) {
+    const v = user.vec
+    if (!this.fast || !this.slow || this.fast.length !== v.length) {
+      this.fast = Float32Array.from(v)
+      this.slow = Float32Array.from(v)
+      this.stir = 0
+      return
+    }
+    const kf = 1 - Math.exp(-dt / STILL_FAST_SEC)
+    const ks = 1 - Math.exp(-dt / STILL_SLOW_SEC)
+    for (let i = 0; i < v.length; i++) {
+      this.fast[i] += (v[i] - this.fast[i]) * kf
+      this.slow[i] += (v[i] - this.slow[i]) * ks
+    }
+    const apart = distance({ vec: this.fast, vis: user.vis }, { vec: this.slow, vis: user.vis })
+    this.stir = apart / (STILL_SLOW_SEC - STILL_FAST_SEC)
   }
 
   private easePace(rate: number, dt: number) {

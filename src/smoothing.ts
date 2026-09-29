@@ -75,6 +75,17 @@ export interface LandmarkFilterOptions {
   holdMs: number
   /** Then how long its visibility takes to fade to what the tracker now says. */
   fadeMs: number
+  /**
+   * A detection whose shoulder width (or torso length, with the hips well
+   * seen) differs from the filtered body's by more than this share is
+   * implausible, as is one whose shoulders swap sides or jump by more than
+   * `maxJump` shoulder widths in a thirtieth of a second: it is passed over as
+   * if no one were found.
+   */
+  maxScaleChange: number
+  maxJump: number
+  /** This many implausible detections in a row that agree with each other are a real change, and are taken. */
+  reacquireFrames: number
 }
 
 export const DEFAULT_LANDMARK_FILTER: LandmarkFilterOptions = {
@@ -83,6 +94,46 @@ export const DEFAULT_LANDMARK_FILTER: LandmarkFilterOptions = {
   minVisibility: 0.5,
   holdMs: 250,
   fadeMs: 500,
+  // A body can't change size by a third in one frame; MediaPipe sometimes
+  // collapses the shoulders or swaps the sides for a frame or two, arms overhead.
+  maxScaleChange: 0.35,
+  // Shifting the whole body quickly is about a tenth of a shoulder width a frame.
+  maxJump: 0.5,
+  reacquireFrames: 3,
+}
+
+// MediaPipe's shoulders and hips.
+const L_SHOULDER = 11
+const R_SHOULDER = 12
+const L_HIP = 23
+const R_HIP = 24
+/** Hips must be this well seen to measure the torso by: out of frame, MediaPipe guesses them. */
+const SURE = 0.8
+
+type Pt2 = { x: number; y: number }
+const dist = (a: Pt2, b: Pt2) => Math.hypot(a.x - b.x, a.y - b.y)
+const midpoint = (a: Pt2, b: Pt2) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+
+/** The few points a detection's plausibility is judged by, or null if its shoulders aren't seen. */
+interface Frame {
+  ls: Pt2
+  rs: Pt2
+  /** Shoulder width. */
+  w: number
+  /** Torso length, when the hips are well seen. */
+  torso: number | null
+}
+
+function frameOf(p: (i: number) => (Pt2 & { visibility?: number }) | null, minVisibility: number): Frame | null {
+  const ls = p(L_SHOULDER)
+  const rs = p(R_SHOULDER)
+  if (!ls || !rs || (ls.visibility ?? 1) < minVisibility || (rs.visibility ?? 1) < minVisibility) return null
+  const w = dist(ls, rs)
+  if (w <= 1e-4) return null
+  const lh = p(L_HIP)
+  const rh = p(R_HIP)
+  const hips = lh && rh && (lh.visibility ?? 1) >= SURE && (rh.visibility ?? 1) >= SURE
+  return { ls, rs, w, torso: hips ? dist(midpoint(ls, rs), midpoint(lh, rh)) : null }
 }
 
 interface Track {
@@ -105,10 +156,22 @@ interface Track {
  * than the hold, its filter starts afresh rather than sweeping across from
  * the old place. Once no one has been found for the hold and the fade, the
  * result is null.
+ *
+ * A detection that can't be a body moving (its shoulders collapse, swap sides
+ * or leap, or the torso stretches, from one frame to the next) is passed over
+ * like a frame with no one found, so the last good pose holds. A few such
+ * detections in a row that agree with each other are a real change (someone
+ * new, or much nearer): those are taken, and the filters start afresh there.
  */
 export class LandmarkFilter {
   private tracks: Track[] = []
   private lastFound = -Infinity
+  /** The last implausible detection, how many agreeing ones have come in a row, and when. */
+  private odd: Frame | null = null
+  private oddCount = 0
+  private oddTime = 0
+  /** How many detections have been passed over as implausible. */
+  rejected = 0
   readonly opts: LandmarkFilterOptions
 
   constructor(opts: Partial<LandmarkFilterOptions> = {}) {
@@ -117,6 +180,10 @@ export class LandmarkFilter {
 
   update(lm: readonly LandmarkLike[] | null, timeMs: number): LandmarkLike[] | null {
     const { holdMs, fadeMs } = this.opts
+    if (lm && this.implausible(lm, timeMs)) {
+      this.rejected++
+      lm = null
+    }
     if (lm) this.lastFound = timeMs
     else if (timeMs - this.lastFound >= holdMs + fadeMs || !this.tracks.length) {
       this.reset()
@@ -160,9 +227,51 @@ export class LandmarkFilter {
     return { x: t.px, y: t.py, visibility: t.pv + (v - t.pv) * k }
   }
 
+  /** Whether `lm` can't follow from the body filtered so far; a run of agreeing ones is taken as a real change. */
+  private implausible(lm: readonly LandmarkLike[], timeMs: number): boolean {
+    const raw = frameOf((i) => lm[i] ?? null, this.opts.minVisibility)
+    const base = this.filtered(timeMs)
+    if (!raw || !base || this.follows(raw, base, timeMs - this.lastFound)) {
+      this.odd = null
+      this.oddCount = 0
+      return false
+    }
+    this.oddCount = this.odd && this.follows(raw, this.odd, timeMs - this.oddTime) ? this.oddCount + 1 : 1
+    this.odd = raw
+    this.oddTime = timeMs
+    if (this.oddCount < this.opts.reacquireFrames) return true
+    // A real change: start afresh there rather than sweeping across.
+    this.reset()
+    return false
+  }
+
+  /** Whether frame `b` could follow frame `a` after `ms`. */
+  private follows(b: Frame, a: Frame, ms: number): boolean {
+    const { maxScaleChange, maxJump } = this.opts
+    if (Math.abs(b.w / a.w - 1) > maxScaleChange) return false
+    if (a.torso !== null && b.torso !== null && Math.abs(b.torso / a.torso - 1) > maxScaleChange) return false
+    // The shoulders swapped sides (the line between them turned more than a right angle).
+    if ((b.rs.x - b.ls.x) * (a.rs.x - a.ls.x) + (b.rs.y - b.ls.y) * (a.rs.y - a.ls.y) <= 0) return false
+    // A slow camera allows a longer jump; passed-over frames don't widen it further.
+    const jump = maxJump * a.w * Math.min(2, Math.max(1, (ms * 30) / 1000))
+    return dist(b.ls, a.ls) <= jump && dist(b.rs, a.rs) <= jump
+  }
+
+  /** The filtered body as it stands, if its shoulders were seen lately. */
+  private filtered(timeMs: number): Frame | null {
+    const { holdMs, minVisibility } = this.opts
+    return frameOf((i) => {
+      const t = this.tracks[i]
+      if (!t || t.seen < 0 || timeMs - t.seen > holdMs) return null
+      return { x: t.px, y: t.py, visibility: t.pv }
+    }, minVisibility)
+  }
+
   reset() {
     this.tracks = []
     this.lastFound = -Infinity
+    this.odd = null
+    this.oddCount = 0
   }
 }
 
